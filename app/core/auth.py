@@ -51,10 +51,20 @@ from app.core.config import settings
 from app.core.audit import audit_event
 from app.core.db import get_async_session
 from app.core.logging import get_logger
+from app.core.rate_limit import keyed_count, keyed_hit
 from app.core.roles import UserRole
 from app.models.user import OAuthAccount, User
 
 log = get_logger(__name__)
+
+# Per-account / per-address throttles (on top of the per-IP router limits), so
+# attackers spread over many IPs cannot brute-force one account or flood one
+# inbox. Keyed by the submitted email (hashed), including unknown emails, so
+# behaviour does not reveal which accounts exist.
+LOGIN_FAILURE_LIMIT = 10
+LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
+EMAILS_PER_ADDRESS_LIMIT = 3
+EMAILS_PER_ADDRESS_WINDOW_SECONDS = 60 * 60
 
 
 # --- Custom auth exception ----------------------------------------------------
@@ -152,19 +162,35 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         # raise on inactive-but-correct-password.
         from fastapi_users import exceptions as fu_exceptions
 
+        # Per-account lockout: once an email has too many recent failures,
+        # refuse every attempt (even a correct password) until the window
+        # ends, so distributed guessing cannot continue.
+        account = credentials.username
+        failures = await keyed_count("login_fail", account, LOGIN_FAILURE_WINDOW_SECONDS)
+        if failures >= LOGIN_FAILURE_LIMIT:
+            audit_event("login", actor=account, status="blocked",
+                        reason="too_many_failures")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Try again later.",
+                headers={"Retry-After": str(LOGIN_FAILURE_WINDOW_SECONDS)},
+            )
+
         try:
-            user = await self.get_by_email(credentials.username)
+            user = await self.get_by_email(account)
         except fu_exceptions.UserNotExists:
             # Run the hasher to mitigate timing attack (mirrors upstream).
             self.password_helper.hash(credentials.password)
+            await keyed_hit("login_fail", account, LOGIN_FAILURE_WINDOW_SECONDS)
             return None
 
         verified, updated_password_hash = self.password_helper.verify_and_update(
             credentials.password, user.hashed_password
         )
         if not verified:
-            audit_event("login", actor=credentials.username, status="failure",
+            audit_event("login", actor=account, status="failure",
                         reason="bad_password")
+            await keyed_hit("login_fail", account, LOGIN_FAILURE_WINDOW_SECONDS)
             return None
         if updated_password_hash is not None:
             await self.user_db.update(user, {"hashed_password": updated_password_hash})
@@ -245,9 +271,25 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             audit_event("password.change", actor=user.email)
             await self._invalidate_existing_tokens(user)
 
+    async def _email_quota_exceeded(self, kind: str, email: str) -> bool:
+        """Count one outgoing `kind` email to `email`; True if over the limit.
+
+        The API still answers 202 when the quota is hit (no enumeration); the
+        email is just not sent, so one inbox cannot be flooded.
+        """
+        sent = await keyed_hit(f"{kind}_email", email, EMAILS_PER_ADDRESS_WINDOW_SECONDS)
+        if sent > EMAILS_PER_ADDRESS_LIMIT:
+            log.warning("%s email to %s suppressed (per-address limit)", kind, email)
+            audit_event(f"{kind}.email", actor=email, status="blocked",
+                        reason="per_address_limit")
+            return True
+        return False
+
     async def on_after_forgot_password(self, user: User, token: str, request=None):
         log.info("password reset requested for %s", user.email)
         audit_event("password.forgot", actor=user.email)
+        if await self._email_quota_exceeded("reset", user.email):
+            return
         reset_link = f"{settings.frontend_url}/reset-password?token={token}"
         subject, html_body, text_body = password_reset_email(reset_link)
         await send_email(user.email, subject, html_body, text_body)
@@ -255,6 +297,8 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_request_verify(self, user: User, token: str, request=None):
         log.info("email verification requested for %s", user.email)
         audit_event("verify.request", actor=user.email)
+        if await self._email_quota_exceeded("verify", user.email):
+            return
         verify_link = f"{settings.frontend_url}/verify-email?token={token}"
         subject = "Verify your CloudNest email"
         html_body = (

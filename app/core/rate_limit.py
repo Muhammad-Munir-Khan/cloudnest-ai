@@ -32,6 +32,7 @@ Config (app/core/config.py Settings; env, .env or /run/secrets):
 Requires the `redis` package (redis-py, async client): add `redis>=5` to
 requirements.txt, and a `redis` service to docker-compose (see README/below).
 """
+import hashlib
 import ipaddress
 import time
 from functools import lru_cache
@@ -62,6 +63,45 @@ def _get_redis():
     if _redis is None:
         _redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
     return _redis
+
+
+# --- Keyed counters (per account / per email address) -------------------------
+# Used inside the auth flow, where the key is an email address rather than the
+# caller's IP, so attackers spread over many IPs are still limited. Keys are
+# hashed so raw addresses never land in Redis. These always fail open: a Redis
+# outage must not lock everyone out of logging in.
+
+def _keyed(scope: str, key: str, seconds: int) -> str:
+    digest = hashlib.sha256(key.strip().lower().encode("utf-8")).hexdigest()[:32]
+    return f"rl:{scope}:{digest}:{int(time.time() // seconds)}"
+
+
+async def keyed_count(scope: str, key: str, seconds: int) -> int:
+    """Events recorded for (scope, key) in the current window (0 if unknown)."""
+    r = _get_redis()
+    if r is None:
+        return 0
+    try:
+        return int(await r.get(_keyed(scope, key, seconds)) or 0)
+    except Exception as e:
+        log.warning("keyed rate limit read failed (allowing): %s", e)
+        return 0
+
+
+async def keyed_hit(scope: str, key: str, seconds: int) -> int:
+    """Record one event for (scope, key); return the window's new count."""
+    r = _get_redis()
+    if r is None:
+        return 0
+    k = _keyed(scope, key, seconds)
+    try:
+        current = await r.incr(k)
+        if current == 1:
+            await r.expire(k, seconds)
+        return int(current)
+    except Exception as e:
+        log.warning("keyed rate limit write failed (allowing): %s", e)
+        return 0
 
 
 @lru_cache(maxsize=1)
