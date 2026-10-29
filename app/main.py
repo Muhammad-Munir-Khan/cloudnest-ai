@@ -32,6 +32,7 @@ from app.core.config import settings
 from app.core.db import get_async_session
 from app.core.llm import active_model_name, active_provider
 from app.core.logging import configure_logging, get_logger
+from app.core.observability import init_sentry
 from app.core.schemas_user import UserCreate, UserRead, UserUpdate
 from app.models.user import User
 
@@ -40,30 +41,8 @@ log = get_logger(__name__)
 
 
 # --- Error tracking (Sentry) --------------------------------------------------
-# No-op unless SENTRY_DSN is a real http(s):// URL, and a no-op if sentry-sdk
-# isn't installed. We validate the DSN scheme rather than just truthiness so a
-# blank, placeholder, or malformed value can NEVER crash startup (sentry_sdk
-# raises BadDsn on init for an invalid DSN). send_default_pii=False keeps user
-# emails / IPs out of error reports.
-_SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
-if _SENTRY_DSN.startswith(("http://", "https://")):
-    try:
-        import sentry_sdk
-
-        sentry_sdk.init(
-            dsn=_SENTRY_DSN,
-            environment=os.getenv("ENVIRONMENT", "development"),
-            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
-            send_default_pii=False,
-        )
-        log.info("Sentry error tracking enabled (env=%s)", os.getenv("ENVIRONMENT", "development"))
-    except ImportError:
-        log.info("sentry-sdk not installed; error tracking disabled")
-    except Exception as e:
-        # Never let observability setup take down the app.
-        log.warning("Sentry init failed, continuing without it: %s", e)
-else:
-    log.info("SENTRY_DSN not set or not a URL; error tracking disabled")
+# Opt-in via SENTRY_DSN; never crashes startup. See app/core/observability.py.
+init_sentry()
 
 
 # --- Startup pre-warm ---------------------------------------------------------

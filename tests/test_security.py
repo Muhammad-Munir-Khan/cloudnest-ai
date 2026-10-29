@@ -1,36 +1,21 @@
 """Security-focused tests for the Phase 1 hardening.
 
-These are intentionally self-contained: the pure-logic tests (magic-byte
-sniffing, rate-limit keying, DSN validation, secrets resolution) need no
-network, DB, or Redis. The security-headers test spins up a tiny FastAPI app
-with just the middleware attached, so it doesn't import the full application
-graph (which would pull in Weaviate/embeddings). Run with: `pytest tests/test_security.py`
+Every test exercises the real application code (no copied logic):
+upload signature sniffing, rate-limit client keying, the Sentry DSN guard,
+the secrets loader, and the security-headers middleware. None of them need a
+network, database or Redis.
 """
-import os
-
 import pytest
+
+from app.api.attachment_routes import _sniff_ok
+from app.core import rate_limit
+from app.core.config import settings
+from app.core.observability import sentry_dsn_is_valid
 
 
 # --------------------------------------------------------------------------- #
 # Upload signature sniffing (app/api/attachment_routes.py::_sniff_ok)
 # --------------------------------------------------------------------------- #
-# Replicated here so the test stays runnable even if the route module pulls in
-# app deps; the logic under test is the byte-signature check.
-def _sniff_ok(ext: str, data: bytes) -> bool:
-    head = data[:16]
-    if ext == ".pdf":
-        return head.startswith(b"%PDF")
-    if ext == ".png":
-        return head.startswith(b"\x89PNG\r\n\x1a\n")
-    if ext in (".jpg", ".jpeg"):
-        return head.startswith(b"\xff\xd8\xff")
-    if ext == ".gif":
-        return head.startswith((b"GIF87a", b"GIF89a"))
-    if ext == ".webp":
-        return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
-    return True
-
-
 @pytest.mark.parametrize(
     "ext,data,expected",
     [
@@ -52,6 +37,7 @@ def test_sniff_ok(ext, data, expected):
 
 # --------------------------------------------------------------------------- #
 # Rate-limit client keying (app/core/rate_limit.py::_client_key)
+# XFF / trusted-proxy cases are covered in tests/test_rate_limit.py.
 # --------------------------------------------------------------------------- #
 class _FakeClient:
     def __init__(self, host):
@@ -72,49 +58,38 @@ class _FakeRequest:
             self.state.user = user
 
 
-def _client_key(request) -> str:
-    user = getattr(request.state, "user", None)
-    user_id = getattr(user, "id", None) if user is not None else None
-    if user_id is not None:
-        return f"user:{user_id}"
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        ip = xff.split(",")[0].strip()
-    else:
-        ip = request.client.host if request.client else "unknown"
-    return f"ip:{ip}"
+@pytest.fixture
+def no_trusted_proxies(monkeypatch):
+    monkeypatch.setattr(settings, "trusted_proxies", "")
+    rate_limit._trusted_networks.cache_clear()
+    yield
+    rate_limit._trusted_networks.cache_clear()
 
 
-def test_client_key_prefers_authenticated_user():
+def test_client_key_prefers_authenticated_user(no_trusted_proxies):
     class U:
         id = "abc-123"
-    req = _FakeRequest(user=U())
-    assert _client_key(req) == "user:abc-123"
+    assert rate_limit._client_key(_FakeRequest(user=U())) == "user:abc-123"
 
 
-def test_client_key_falls_back_to_direct_ip():
-    req = _FakeRequest(client_host="9.9.9.9")
-    assert _client_key(req) == "ip:9.9.9.9"
+def test_client_key_falls_back_to_direct_ip(no_trusted_proxies):
+    assert rate_limit._client_key(_FakeRequest(client_host="9.9.9.9")) == "ip:9.9.9.9"
 
 
-def test_client_key_uses_first_xff_hop_behind_proxy():
-    req = _FakeRequest(headers={"x-forwarded-for": "203.0.113.5, 10.0.0.1"})
-    assert _client_key(req) == "ip:203.0.113.5"
+def test_client_key_ignores_xff_from_untrusted_peer(no_trusted_proxies):
+    req = _FakeRequest(headers={"x-forwarded-for": "203.0.113.5"}, client_host="9.9.9.9")
+    assert rate_limit._client_key(req) == "ip:9.9.9.9"
 
 
 # --------------------------------------------------------------------------- #
-# Sentry DSN guard (the rule used in app/main.py)
+# Sentry DSN guard (app/core/observability.py::sentry_dsn_is_valid)
 # --------------------------------------------------------------------------- #
-def _sentry_would_init(dsn: str | None) -> bool:
-    d = (dsn or "").strip()
-    return d.startswith(("http://", "https://"))
-
-
 @pytest.mark.parametrize(
     "dsn,expected",
     [
         ("", False),
         ("   ", False),
+        (None, False),
         ("YOUR_DSN_HERE", False),
         ("changeme", False),
         ("https://abc@o1.ingest.sentry.io/2", True),
@@ -122,7 +97,14 @@ def _sentry_would_init(dsn: str | None) -> bool:
     ],
 )
 def test_sentry_dsn_guard(dsn, expected):
-    assert _sentry_would_init(dsn) is expected
+    assert sentry_dsn_is_valid(dsn) is expected
+
+
+def test_init_sentry_disabled_without_dsn(monkeypatch):
+    from app.core.observability import init_sentry
+
+    monkeypatch.setenv("SENTRY_DSN", "not-a-url")
+    assert init_sentry() is False
 
 
 # --------------------------------------------------------------------------- #
@@ -147,7 +129,7 @@ def test_secret_from_plain_env(monkeypatch):
 
 
 def test_secret_required_raises_when_missing(monkeypatch):
-    from app.core.secrets import get_secret, SecretNotFoundError
+    from app.core.secrets import SecretNotFoundError, get_secret
 
     monkeypatch.delenv("DOES_NOT_EXIST_FILE", raising=False)
     monkeypatch.delenv("DOES_NOT_EXIST", raising=False)
@@ -167,8 +149,9 @@ def test_secret_default_when_missing(monkeypatch):
 # Security headers middleware (app/core/security_headers.py)
 # --------------------------------------------------------------------------- #
 def test_security_headers_present_on_responses():
-    fastapi = pytest.importorskip("fastapi")
+    import fastapi
     from fastapi.testclient import TestClient
+
     from app.core.security_headers import SecurityHeadersMiddleware
 
     app = fastapi.FastAPI()
@@ -178,12 +161,10 @@ def test_security_headers_present_on_responses():
     def ping():
         return {"ok": True}
 
-    client = TestClient(app)
-    r = client.get("/ping")
+    r = TestClient(app).get("/ping")
     assert r.status_code == 200
     assert r.headers["X-Content-Type-Options"] == "nosniff"
     assert r.headers["X-Frame-Options"] == "DENY"
-    assert "Content-Security-Policy" in r.headers
     assert "Strict-Transport-Security" in r.headers
     # Strict CSP on a normal (non-docs) route.
     assert "default-src 'none'" in r.headers["Content-Security-Policy"]

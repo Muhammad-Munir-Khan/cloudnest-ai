@@ -13,6 +13,7 @@ Langfuse Python SDK v4: the client is initialized once from settings, and
 CallbackHandler() reads credentials from that initialized client (it takes
 no key arguments in v4). Import path is `langfuse.langchain`.
 """
+import os
 from functools import lru_cache
 
 from app.core.config import settings
@@ -92,3 +93,46 @@ def flush_langfuse() -> None:
         client.flush()
     except Exception as e:
         log.debug("Langfuse flush failed (non-fatal): %s", e)
+
+
+# --- Error tracking (Sentry) --------------------------------------------------
+
+def sentry_dsn_is_valid(dsn: str | None) -> bool:
+    """True only for an http(s):// DSN.
+
+    We validate the scheme rather than just truthiness so a blank, placeholder,
+    or malformed value can NEVER crash startup (sentry_sdk raises BadDsn on
+    init for an invalid DSN).
+    """
+    return (dsn or "").strip().startswith(("http://", "https://"))
+
+
+def init_sentry() -> bool:
+    """Initialise Sentry from SENTRY_DSN if valid. Returns True if enabled.
+
+    No-op unless SENTRY_DSN is a real http(s):// URL, and a no-op if
+    sentry-sdk isn't installed. send_default_pii=False keeps user emails / IPs
+    out of error reports. Never raises.
+    """
+    dsn = os.getenv("SENTRY_DSN", "").strip()
+    if not sentry_dsn_is_valid(dsn):
+        log.info("SENTRY_DSN not set or not a URL; error tracking disabled")
+        return False
+    environment = os.getenv("ENVIRONMENT", "development")
+    try:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=environment,
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            send_default_pii=False,
+        )
+        log.info("Sentry error tracking enabled (env=%s)", environment)
+        return True
+    except ImportError:
+        log.info("sentry-sdk not installed; error tracking disabled")
+    except Exception as e:
+        # Never let observability setup take down the app.
+        log.warning("Sentry init failed, continuing without it: %s", e)
+    return False
