@@ -9,8 +9,9 @@
 # without real DNS, replace both site blocks with `:443` and Caddy will use a
 # self-signed internal cert (browser will warn — that's expected locally).
 #
-# Usage (production):
-#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+# Usage (production, from the repo root; see docker-compose.prod.yml for the
+# required POSTGRES_PASSWORD / REDIS_PASSWORD / WEAVIATE_API_KEY variables):
+#   docker compose --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
 
 # --- Frontend (Next.js) -------------------------------------------------------
 app.example.com {
