@@ -4,11 +4,21 @@
 #   1. adds a Caddy reverse proxy that terminates TLS (automatic HTTPS),
 #   2. stops api/frontend from publishing ports publicly (Caddy is the only
 #      public entrypoint — they talk over the internal Docker network),
-#   3. flips production env flags (secure cookies, ENVIRONMENT=production).
+#   3. flips production env flags (secure cookies, ENVIRONMENT=production),
+#   4. locks down the data services: no published ports for postgres, redis,
+#      weaviate or ollama; Redis requires a password; Weaviate requires an API
+#      key (anonymous access off); Postgres must have an explicit password.
 #
 # Dev is unchanged: plain `docker compose -f docker/docker-compose.yml up`
-# behaves exactly as before. Production:
-#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+# behaves exactly as before. Production (run from the repo root):
+#   docker compose --env-file .env -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+#
+# Required variables (in the --env-file or the shell; startup fails if unset):
+#   POSTGRES_PASSWORD   database password (only applied when the postgres
+#                       volume is first initialised; change an existing one
+#                       with ALTER USER)
+#   REDIS_PASSWORD      Redis AUTH password
+#   WEAVIATE_API_KEY    Weaviate API key (also read by the app)
 #
 # Before running in production: point your DNS A records for app.example.com
 # and api.example.com at this host, and edit the domains in docker/Caddyfile.
@@ -39,9 +49,38 @@ services:
       # Frontend/backend public URLs as seen by the browser (HTTPS via Caddy).
       BACKEND_URL: https://api.example.com
       FRONTEND_URL: https://app.example.com
+      # Credentials for the locked-down data services below.
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+      WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:?set WEAVIATE_API_KEY}
 
   # Don't expose the frontend port publicly in prod; Caddy proxies to it.
   frontend:
+    ports: !reset []
+
+  # --- Data services: internal network only ---------------------------------
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+
+  redis:
+    ports: !reset []
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+
+  weaviate:
+    ports: !reset []
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "false"
+      AUTHENTICATION_APIKEY_ENABLED: "true"
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?set WEAVIATE_API_KEY}
+      AUTHENTICATION_APIKEY_USERS: cloudnest-api
+
+  ollama:
     ports: !reset []
 
 volumes:

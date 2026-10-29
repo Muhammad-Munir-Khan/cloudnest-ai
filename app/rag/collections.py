@@ -80,6 +80,11 @@ def get_weaviate_client() -> weaviate.WeaviateClient:
     http_port = parsed.port or 8080
     grpc_port = settings.weaviate_grpc_port
 
+    auth = None
+    if settings.weaviate_api_key:
+        from weaviate.classes.init import Auth
+        auth = Auth.api_key(settings.weaviate_api_key)
+
     client = weaviate.connect_to_custom(
         http_host=host,
         http_port=http_port,
@@ -87,6 +92,7 @@ def get_weaviate_client() -> weaviate.WeaviateClient:
         grpc_host=host,
         grpc_port=grpc_port,
         grpc_secure=parsed.scheme == "https",
+        auth_credentials=auth,
         skip_init_checks=False,
     )
     log.info("connected to Weaviate at %s (grpc %d)", settings.weaviate_url, grpc_port)

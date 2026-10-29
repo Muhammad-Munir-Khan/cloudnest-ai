@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     weaviate_url: str
     weaviate_grpc_port: int
     weaviate_index_name: str
+    # API key for Weaviate. Unset = anonymous access (local dev). Required by
+    # the production compose overlay, which disables anonymous access.
+    weaviate_api_key: str | None = None
 
     REDIS_URL : str
     COOKIE_SECURE :bool  # true in production (HTTPS)
