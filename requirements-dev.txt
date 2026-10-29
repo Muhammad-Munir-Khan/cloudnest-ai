@@ -1,0 +1,8 @@
+# Development and CI tooling, on top of the runtime dependencies.
+#   pip install -r requirements-dev.txt
+#   pytest tests/
+#   ruff check app tests
+# (httpx, used by FastAPI's TestClient, is already in requirements.txt.)
+-r requirements.txt
+pytest==9.2.0
+ruff==0.16.10
