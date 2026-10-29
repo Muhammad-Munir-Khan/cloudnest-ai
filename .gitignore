@@ -31,3 +31,13 @@ frontend/.env*.local
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated documentation (kept local; see docs/22-documentation-maintenance.md)
+/docs/
+
+# Local assistant/tool files
+/CLAUDE.md
+.claude-flow/
+
+# Draft contributor licence agreement (not legally reviewed; kept local)
+/CLA.md
