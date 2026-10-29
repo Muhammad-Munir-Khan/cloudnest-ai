@@ -40,7 +40,8 @@ services:
 
   # --- Ollama (local LLM) ---------------------------------------------------
   ollama:
-    image: ollama/ollama:latest
+    # Pinned so `docker compose pull` cannot silently change the runtime.
+    image: ollama/ollama:0.40.13
     container_name: cloudnest-ollama
     ports:
       - "11434:11434"
@@ -56,7 +57,7 @@ services:
 
   # One-shot: pull the default model on first start, then exit.
   ollama-pull:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.13
     container_name: cloudnest-ollama-pull
     depends_on:
       ollama:
