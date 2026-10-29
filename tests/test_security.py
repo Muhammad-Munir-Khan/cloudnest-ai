@@ -103,7 +103,7 @@ def test_sentry_dsn_guard(dsn, expected):
 def test_init_sentry_disabled_without_dsn(monkeypatch):
     from app.core.observability import init_sentry
 
-    monkeypatch.setenv("SENTRY_DSN", "not-a-url")
+    monkeypatch.setattr(settings, "SENTRY_DSN", "not-a-url")
     assert init_sentry() is False
 
 

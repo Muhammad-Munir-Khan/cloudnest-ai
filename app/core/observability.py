@@ -13,7 +13,6 @@ Langfuse Python SDK v4: the client is initialized once from settings, and
 CallbackHandler() reads credentials from that initialized client (it takes
 no key arguments in v4). Import path is `langfuse.langchain`.
 """
-import os
 from functools import lru_cache
 
 from app.core.config import settings
@@ -114,18 +113,18 @@ def init_sentry() -> bool:
     sentry-sdk isn't installed. send_default_pii=False keeps user emails / IPs
     out of error reports. Never raises.
     """
-    dsn = os.getenv("SENTRY_DSN", "").strip()
+    dsn = (settings.SENTRY_DSN or "").strip()
     if not sentry_dsn_is_valid(dsn):
         log.info("SENTRY_DSN not set or not a URL; error tracking disabled")
         return False
-    environment = os.getenv("ENVIRONMENT", "development")
+    environment = settings.ENVIRONMENT
     try:
         import sentry_sdk
 
         sentry_sdk.init(
             dsn=dsn,
             environment=environment,
-            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
             send_default_pii=False,
         )
         log.info("Sentry error tracking enabled (env=%s)", environment)

@@ -1,5 +1,4 @@
 """FastAPI application entry point."""
-import os
 from contextlib import asynccontextmanager
 
 import httpx
@@ -180,15 +179,13 @@ app.include_router(
 #   POST /auth/jwt/logout    -> no-op (JWT is stateless)
 #   POST /auth/cookie/logout -> clears the cookie
 #
-# REQUIRE_EMAIL_VERIFICATION (env, default false): when true, both login
+# REQUIRE_EMAIL_VERIFICATION (setting, default false): when true, both login
 # backends reject unverified accounts (400) until the user clicks the link in
 # their verification email. Left OFF by default so it doesn't lock out existing
 # users or break dev where SMTP isn't configured. Turn it ON for production
 # once SMTP works and the frontend has a /verify-email page. OAuth signups are
 # created verified, so they're unaffected.
-_REQUIRE_VERIFY = os.getenv("REQUIRE_EMAIL_VERIFICATION", "false").lower() in (
-    "1", "true", "yes",
-)
+_REQUIRE_VERIFY = settings.REQUIRE_EMAIL_VERIFICATION
 # Brute-force protection: 10 auth attempts/min/IP (login + logout share the
 # router), 5 registrations/min/IP to curb signup spam.
 app.include_router(

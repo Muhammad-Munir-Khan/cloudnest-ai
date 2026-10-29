@@ -131,12 +131,16 @@ class Settings(BaseSettings):
     # X-Forwarded-For for rate limiting. Empty = trust none (use peer address).
     trusted_proxies: str = ""
 
-    REDIS_URL : str
-    COOKIE_SECURE :bool  # true in production (HTTPS)
-    REQUIRE_EMAIL_VERIFICATION :bool # true in production once SMTP works
-    SENTRY_DSN : str
-    ENVIRONMENT :str
-    SENTRY_TRACES_SAMPLE_RATE :float
+    # Runtime flags. Read through Settings (not os.getenv) so values in .env
+    # and /run/secrets apply in every run mode, not only under Docker's
+    # env_file. Defaults match the previous os.getenv fallbacks.
+    REDIS_URL: str = "redis://redis:6379/0"
+    rate_limit_fail_open: bool = True
+    COOKIE_SECURE: bool = False  # true in production (HTTPS)
+    REQUIRE_EMAIL_VERIFICATION: bool = False  # true in production once SMTP works
+    SENTRY_DSN: str = ""
+    ENVIRONMENT: str = "development"
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1
 
     # Derived paths
     @property

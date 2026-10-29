@@ -21,7 +21,6 @@ Account suspension at login:
     return None (generic "bad credentials") so attackers can't probe whether
     a given email is suspended vs nonexistent.
 """
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -310,7 +309,7 @@ jwt_backend = AuthenticationBackend(
 # requests — you'd need samesite="none" (which REQUIRES secure=True). Keep them
 # same-site (e.g. app.example.com + api.example.com share example.com) to stay
 # on the safer "lax".
-_COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+_COOKIE_SECURE = settings.COOKIE_SECURE
 
 cookie_transport = CookieTransport(
     cookie_name="genai_auth",

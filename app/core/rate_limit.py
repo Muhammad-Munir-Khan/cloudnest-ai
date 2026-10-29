@@ -22,9 +22,9 @@ Design choices:
     burst at the window boundary; that's acceptable for a first cut. Upgrade to
     a sliding-window or token-bucket later if boundary bursts matter.
 
-Config via env (override in .env; can be promoted into config.py later):
+Config (app/core/config.py Settings; env, .env or /run/secrets):
   REDIS_URL                 default redis://redis:6379/0
-  RATE_LIMIT_FAIL_OPEN      default "true"
+  RATE_LIMIT_FAIL_OPEN      default true (settings field rate_limit_fail_open)
   TRUSTED_PROXIES           comma-separated IPs/CIDRs of reverse proxies whose
                             X-Forwarded-For may be trusted (settings field
                             trusted_proxies; default empty = trust none)
@@ -33,7 +33,6 @@ Requires the `redis` package (redis-py, async client): add `redis>=5` to
 requirements.txt, and a `redis` service to docker-compose (see README/below).
 """
 import ipaddress
-import os
 import time
 from functools import lru_cache
 
@@ -49,8 +48,8 @@ try:
 except ImportError:  # redis not installed yet — limiter degrades to no-op
     aioredis = None
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-_FAIL_OPEN = os.getenv("RATE_LIMIT_FAIL_OPEN", "true").lower() in ("1", "true", "yes")
+REDIS_URL = settings.REDIS_URL
+_FAIL_OPEN = settings.rate_limit_fail_open
 
 _redis = None
 
