@@ -36,6 +36,7 @@ from app.models.user import User
 from app.rag.collections import (
     delete_user_collection,
     delete_user_docs_dir,
+    delete_user_workspace_dir,
 )
 from app.rag.global_collection import (
     add_to_global_corpus,
@@ -383,7 +384,8 @@ async def delete_user(
          Order within the transaction: chat_messages -> chat_sessions ->
          oauth_account -> users. Foreign keys would otherwise cascade-block.
       2. Weaviate tenant (best-effort, logged on failure).
-      3. On-disk docs folder (best-effort, logged on failure).
+      3. On-disk docs folder and legacy attachment workspace (best-effort,
+         logged on failure).
       4. Confirmation email (background task, already non-fatal on SMTP failure).
 
     Reasoning: if Postgres delete succeeds, the user is GONE from the system's
@@ -464,10 +466,12 @@ async def delete_user(
     await run_in_threadpool(delete_user_collection, user_id)
 
     # --- Step 3: Disk cleanup (best-effort) ---
-    try:
-        await run_in_threadpool(delete_user_docs_dir, user_id)
-    except Exception as e:
-        log.warning("disk cleanup failed for user %s: %s", user_id, e)
+    for cleanup in (delete_user_docs_dir, delete_user_workspace_dir):
+        try:
+            await run_in_threadpool(cleanup, user_id)
+        except Exception as e:
+            log.warning("disk cleanup (%s) failed for user %s: %s",
+                        cleanup.__name__, user_id, e)
 
     # --- Step 4: Email the (now-deleted) user ---
     subject, html_body, text_body = account_deleted_email()

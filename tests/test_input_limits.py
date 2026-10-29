@@ -122,6 +122,7 @@ BLOCKING = {
     "ingest", "ingest_single_file_for_user", "extract_attachment", "transcribe_file",
     "add_to_global_corpus", "global_corpus_count", "global_search", "list_sources",
     "delete_by_source", "delete_user_collection", "delete_user_docs_dir",
+    "delete_user_workspace_dir",
 }
 
 

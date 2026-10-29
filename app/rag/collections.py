@@ -196,6 +196,21 @@ def delete_user_docs_dir(user_id: str | uuid.UUID) -> None:
         log.info("deleted docs dir for user %s", user_id)
 
 
+def delete_user_workspace_dir(user_id: str | uuid.UUID) -> None:
+    """Remove a user's legacy attachment workspace (data/repl_workspace/<hex>).
+
+    Attachments are no longer copied there, but folders written by older
+    versions may still exist and must not outlive the account.
+    """
+    import shutil
+    if isinstance(user_id, str):
+        user_id = uuid.UUID(user_id)
+    path = settings.data_dir / "repl_workspace" / user_id.hex
+    if path.exists():
+        shutil.rmtree(path)
+        log.info("deleted attachment workspace for user %s", user_id)
+
+
 # --- Tenant-scoped data operations (the safe choke point) ------------------
 
 def add_documents_for(user_id: str | uuid.UUID, chunks: list) -> list[str]:

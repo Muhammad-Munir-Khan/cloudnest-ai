@@ -1,9 +1,8 @@
 """Attachment endpoints: extract text, optionally persist to docs. Auth required.
 
-Beyond text extraction, the raw uploaded file is also saved into the user's
-per-user workspace folder (data/repl_workspace/<user_hex>/) so that the
-python_repl and csv_reader tools can find it by its original filename in
-subsequent agent turns.
+Only the extracted text is returned to the client; the raw upload is not kept
+on disk (it used to be copied to data/repl_workspace/<user_hex>/ for
+python_repl/csv_reader tools that no longer exist).
 
 Upload hardening (Phase 1):
   - Size cap enforced BEFORE extraction (413 instead of reading/parsing a huge
@@ -15,7 +14,6 @@ Upload hardening (Phase 1):
 These run after auth and the empty-file check, so an unauthenticated or empty
 request is rejected first.
 """
-import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -92,40 +90,6 @@ class ExtractResponse(BaseModel):
     char_count: int
 
 
-def _sanitize_filename(name: str) -> str:
-    """Strip directory components and unsafe characters from an uploaded
-    filename so we can use it safely as a path inside the user's workspace.
-    """
-    # Path(name).name drops any directory parts (defense against ../../).
-    base = Path(name).name
-    # Replace anything that isn't alnum, dot, dash, underscore.
-    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in base)
-    # Avoid pathological empty names.
-    return safe or "upload.bin"
-
-
-def _save_to_user_workspace(user: User, filename: str, data: bytes) -> Path | None:
-    """Save the raw uploaded bytes into the user's repl_workspace folder so
-    python_repl and csv_reader can find the file by name.
-
-    Best-effort: if this fails (disk full, permissions, etc.) the request
-    still succeeds because the extracted text is enough for most uses.
-    """
-    try:
-        workspace = settings.data_dir / "repl_workspace" / user.id.hex
-        workspace.mkdir(parents=True, exist_ok=True)
-        target = workspace / _sanitize_filename(filename)
-        target.write_bytes(data)
-        log.info(
-            "saved attachment %s to user workspace %s (%d bytes)",
-            target.name, user.id.hex, len(data),
-        )
-        return target
-    except Exception as e:
-        log.warning("failed to save attachment to user workspace: %s", e)
-        return None
-
-
 @router.post("/extract", response_model=ExtractResponse)
 async def extract(
     file: UploadFile = File(...),
@@ -134,8 +98,8 @@ async def extract(
 ):
     """Extract text from an uploaded file. Optionally persist into data/docs.
 
-    The raw file is ALWAYS also saved into the user's repl_workspace folder
-    so python_repl and csv_reader can read it by filename.
+    The raw bytes are only held in memory for extraction; nothing is written
+    to disk unless persist=True (superusers only).
 
     NOTE: `persist=True` re-indexes the SHARED corpus, which all users currently
     query. To prevent random users from polluting it, persist+reindex is now
@@ -157,10 +121,6 @@ async def extract(
 
     # Validate size + type + signature BEFORE doing any extraction work.
     _validate_upload(file.filename, data)
-
-    # Save raw file to the user's private workspace BEFORE extraction so that
-    # tools can find it even if extraction later fails. Best-effort.
-    _save_to_user_workspace(user, file.filename, data)
 
     # PDF parsing and vision OCR are blocking (CPU + provider HTTP calls).
     try:
