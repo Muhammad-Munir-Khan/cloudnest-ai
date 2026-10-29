@@ -28,7 +28,7 @@ import json
 import threading
 import time
 import uuid
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 from langchain_core.messages import (
     AIMessage,
@@ -135,6 +135,11 @@ Guidelines:
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    # Per-run tool-dedup bookkeeping. Kept in graph state (not on the shared
+    # DedupToolNode instance) so every invocation starts empty and concurrent
+    # requests from different users can never see each other's tool results.
+    tool_cache: NotRequired[dict[str, str]]   # dedup_key -> result content
+    tools_ran: NotRequired[list[str]]         # tool names already run this turn
 
 
 def _dedup_key(name: str, args: dict) -> str:
@@ -157,24 +162,21 @@ class DedupToolNode:
          ToolMessage telling the model to answer from what it has.
 
     Calls that pass both checks are delegated to the real ToolNode and their
-    results cached. State (_executed / _cache / _ran_tools) lives on the
-    compiled-graph-run scope via instance attributes reset at the start of each
-    top-level run by reset_run_state().
+    results cached. The cache lives in the graph state (tool_cache /
+    tools_ran), never on this instance: the node is shared by every request,
+    so instance state would leak tool results across concurrent users.
     """
 
     def __init__(self, tools):
         self._inner = ToolNode(tools)
-        self._executed: dict[str, str] = {}   # dedup_key -> result content
-        self._ran_tools: set[str] = set()      # tool names already run this turn
-
-    def reset_run_state(self):
-        self._executed.clear()
-        self._ran_tools.clear()
 
     def __call__(self, state: AgentState):
         last = state["messages"][-1]
         if not (isinstance(last, AIMessage) and last.tool_calls):
             return {"messages": []}
+
+        executed_cache = dict(state.get("tool_cache") or {})
+        ran_tools = set(state.get("tools_ran") or [])
 
         passthrough_calls = []   # tool calls we will actually execute
         synthetic_msgs = []      # ToolMessages we fabricate for suppressed calls
@@ -185,18 +187,18 @@ class DedupToolNode:
             call_id = tc["id"]
             key = _dedup_key(name, args)
 
-            if key in self._executed:
+            if key in executed_cache:
                 log.info("dedup: exact-repeat %s suppressed (cached)", name)
                 synthetic_msgs.append(
                     ToolMessage(
-                        content=self._executed[key],
+                        content=executed_cache[key],
                         tool_call_id=call_id,
                         name=name,
                     )
                 )
                 continue
 
-            if name in SINGLE_SHOT_TOOLS and name in self._ran_tools:
+            if name in SINGLE_SHOT_TOOLS and name in ran_tools:
                 log.info("dedup: single-shot %s already ran this turn, blocking repeat", name)
                 synthetic_msgs.append(
                     ToolMessage(
@@ -229,13 +231,17 @@ class DedupToolNode:
                     src = by_id.get(msg.tool_call_id)
                     if src:
                         k = _dedup_key(src["name"], src.get("args", {}) or {})
-                        self._executed[k] = msg.content or ""
-                        self._ran_tools.add(src["name"])
+                        executed_cache[k] = msg.content or ""
+                        ran_tools.add(src["name"])
 
         # Preserve original call order: synthetic + executed together. Order
         # within doesn't matter to the LLM as long as every tool_call_id is
         # answered, which it is.
-        return {"messages": synthetic_msgs + executed_msgs}
+        return {
+            "messages": synthetic_msgs + executed_msgs,
+            "tool_cache": executed_cache,
+            "tools_ran": sorted(ran_tools),
+        }
 
 
 def _build_graph():
@@ -259,11 +265,7 @@ def _build_graph():
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")
-    compiled = graph.compile()
-    # Expose the dedup node so per-run state can be reset before each top-level
-    # invocation (the same compiled graph is reused across requests).
-    compiled._dedup_node = dedup_node
-    return compiled
+    return graph.compile()
 
 
 _graph = None
@@ -274,14 +276,6 @@ def get_graph():
     if _graph is None:
         _graph = _build_graph()
     return _graph
-
-
-def _reset_dedup_state():
-    """Clear per-turn dedup memory before a new top-level agent run."""
-    g = get_graph()
-    node = getattr(g, "_dedup_node", None)
-    if node is not None:
-        node.reset_run_state()
 
 
 def _build_config(user_id: str | uuid.UUID, session_id: str) -> dict:
@@ -519,7 +513,6 @@ def run_agent(
     """
     token = set_current_user(user_id)
     try:
-        _reset_dedup_state()
         t0 = time.time()
         history = memory.get(session_id, user_id=user_id)
 
@@ -580,7 +573,6 @@ def stream_agent(
     previous_user = get_current_user()
     set_current_user(user_id)
     try:
-        _reset_dedup_state()
         t0 = time.time()
         history = memory.get(session_id, user_id=user_id)
 
