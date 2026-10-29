@@ -3,8 +3,10 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.logging import get_logger
 from app.core.schemas import IngestResponse, QueryRequest, QueryResponse
@@ -89,24 +91,20 @@ async def upload_document(
                    f"Supported: {sorted(SUPPORTED_EXTENSIONS)}",
         )
 
-    # Read with size cap.
-    data = await file.read()
+    # Read with size cap (aborts as soon as the limit is crossed).
+    data = await read_upload_limited(file, MAX_FILE_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
-    if len(data) > MAX_FILE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max {MAX_FILE_BYTES // (1024 * 1024)}MB.",
-        )
 
     # Save to disk in the user's folder.
     target = docs_dir_for(user.id) / safe_name
     target.write_bytes(data)
     log.info("user %s uploaded %s (%d bytes)", user.id, safe_name, len(data))
 
-    # Ingest just this file (does not wipe existing chunks).
+    # Ingest just this file (does not wipe existing chunks). Parsing and
+    # embedding are blocking, so run them off the event loop.
     try:
-        result = ingest_single_file_for_user(user.id, target)
+        result = await run_in_threadpool(ingest_single_file_for_user, user.id, target)
     except Exception as e:
         # Roll back the file if ingestion failed.
         target.unlink(missing_ok=True)

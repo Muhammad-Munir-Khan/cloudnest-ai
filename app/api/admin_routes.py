@@ -13,11 +13,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi_users import BaseUserManager
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.uploads import read_upload_limited
 from app.core.admin_deps import require_corpus_admin, require_super_admin
 from app.core.audit import audit_event
 from app.core.auth import get_user_manager
@@ -72,11 +74,11 @@ class ActiveUpdateRequest(BaseModel):
     # Optional reason shown to the user in the suspension email. Free-form
     # text. Ignored when is_active=True (unblock). We do NOT persist this -
     # it lives only in the email body, per the v1 product decision.
-    reason: str | None = None
+    reason: str | None = Field(None, max_length=1000)
 
 
 class UserDetailsUpdate(BaseModel):
-    display_name: str | None = None
+    display_name: str | None = Field(None, max_length=80)  # users.display_name is String(80)
 
 
 class CorpusItem(BaseModel):
@@ -87,8 +89,8 @@ class CorpusItem(BaseModel):
     citation. Free-form `content_type` so admins can categorize content
     however suits their use case ("document", "policy", "manual", "faq", ...).
     """
-    text: str = Field(..., min_length=1)
-    content_type: str = "document"
+    text: str = Field(..., min_length=1, max_length=100_000)
+    content_type: str = Field("document", max_length=100)
     source_title: str | None = None
     book_title: str | None = None
     author: str | None = None
@@ -99,7 +101,7 @@ class CorpusItem(BaseModel):
 
 
 class CorpusIngestRequest(BaseModel):
-    items: list[CorpusItem] = Field(..., min_length=1)
+    items: list[CorpusItem] = Field(..., min_length=1, max_length=1000)
 
 
 class CorpusIngestResponse(BaseModel):
@@ -459,11 +461,11 @@ async def delete_user(
     # --- Step 2: Weaviate tenant cleanup (best-effort) ---
     # delete_user_collection already swallows + logs exceptions, so this won't
     # raise. We just call it and trust the logging.
-    delete_user_collection(user_id)
+    await run_in_threadpool(delete_user_collection, user_id)
 
     # --- Step 3: Disk cleanup (best-effort) ---
     try:
-        delete_user_docs_dir(user_id)
+        await run_in_threadpool(delete_user_docs_dir, user_id)
     except Exception as e:
         log.warning("disk cleanup failed for user %s: %s", user_id, e)
 
@@ -495,12 +497,12 @@ async def ingest_structured(
     """
     items = [it.model_dump(exclude_none=True) for it in req.items]
     try:
-        inserted = add_to_global_corpus(items)
+        inserted = await run_in_threadpool(add_to_global_corpus, items)
     except Exception as e:
         log.exception("corpus ingest failed")
         raise HTTPException(status_code=500, detail=f"Ingest failed: {e}")
 
-    total = global_corpus_count()
+    total = await run_in_threadpool(global_corpus_count)
     log.info("admin %s ingested %d items into global corpus", admin.email, inserted)
     audit_event("kb.ingest", actor=admin.email, items=inserted, total=total)
     return CorpusIngestResponse(
@@ -542,18 +544,14 @@ async def ingest_file(
                    f"Supported: {sorted(SUPPORTED_EXTENSIONS)}",
         )
 
-    data = await file.read()
+    data = await read_upload_limited(file, MAX_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Max {MAX_UPLOAD_BYTES // (1024*1024)}MB.",
-        )
 
     tmp_path = Path(tempfile.gettempdir()) / safe_name
     tmp_path.write_bytes(data)
-    try:
+    def _parse_and_insert() -> int:
+        # Parsing, chunking and embedding are blocking; run in a thread.
         raw = _load_one(tmp_path)
         chunks = chunk_documents(raw)
         items = [
@@ -566,14 +564,17 @@ async def ingest_file(
             }
             for c in chunks
         ]
-        inserted = add_to_global_corpus(items)
+        return add_to_global_corpus(items)
+
+    try:
+        inserted = await run_in_threadpool(_parse_and_insert)
     except Exception as e:
         log.exception("file ingest failed: %s", safe_name)
         raise HTTPException(status_code=500, detail=f"Ingest failed: {e}")
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    total = global_corpus_count()
+    total = await run_in_threadpool(global_corpus_count)
     log.info("admin %s ingested %s (%d chunks)", admin.email, safe_name, inserted)
     audit_event("kb.upload", actor=admin.email, target=safe_name, chunks=inserted)
     return CorpusIngestResponse(
@@ -586,7 +587,7 @@ async def ingest_file(
 @router.get("/corpus/stats", response_model=CorpusStats)
 async def corpus_stats(admin: User = Depends(require_corpus_admin)):
     """Total objects in the global corpus."""
-    return CorpusStats(total=global_corpus_count())
+    return CorpusStats(total=await run_in_threadpool(global_corpus_count))
 
 
 class CorpusSourceInfo(BaseModel):
@@ -605,10 +606,10 @@ class CorpusSearchHit(BaseModel):
 
 
 class CorpusSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
+    query: str = Field(..., min_length=1, max_length=2000)
     k: int = 8
-    content_type: str | None = None
-    alpha: float = 0.5
+    content_type: str | None = Field(None, max_length=100)
+    alpha: float = Field(0.5, ge=0.0, le=1.0)
 
 
 class CorpusSearchResponse(BaseModel):
@@ -623,7 +624,7 @@ async def corpus_sources(admin: User = Depends(require_corpus_admin)):
     most-chunks-first. Empty list if the corpus is empty or aggregation
     fails (logs a warning).
     """
-    rows = list_sources()
+    rows = await run_in_threadpool(list_sources)
     return [CorpusSourceInfo(**r) for r in rows]
 
 
@@ -639,7 +640,7 @@ async def delete_corpus_source(
     """
     if not source_title or not source_title.strip():
         raise HTTPException(status_code=400, detail="source_title required")
-    deleted = delete_by_source(source_title)
+    deleted = await run_in_threadpool(delete_by_source, source_title)
     log.info("admin %s deleted source %r (%d chunks)", admin.email, source_title, deleted)
     audit_event("kb.delete", actor=admin.email, target=source_title, deleted=deleted)
     return {"source_title": source_title, "deleted": deleted}
@@ -657,7 +658,8 @@ async def search_corpus(
 
     alpha: 0.0 = pure keyword, 1.0 = pure vector, 0.5 = balanced.
     """
-    results = global_search(
+    results = await run_in_threadpool(
+        global_search,
         query=req.query,
         k=max(1, min(req.k, 50)),
         content_type=req.content_type,
@@ -690,4 +692,7 @@ async def system_stats(
     from sqlalchemy import func
     result = await session.execute(select(func.count()).select_from(User))
     total_users = int(result.scalar() or 0)
-    return SystemStats(total_users=total_users, corpus_total=global_corpus_count())
+    return SystemStats(
+        total_users=total_users,
+        corpus_total=await run_in_threadpool(global_corpus_count),
+    )

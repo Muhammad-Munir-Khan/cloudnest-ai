@@ -35,6 +35,13 @@ app.example.com {
 # --- API (FastAPI) ------------------------------------------------------------
 api.example.com {
 	encode zstd gzip
+
+	# Cap request bodies at the proxy too (also covers chunked uploads without
+	# Content-Length). Matches the app's 30 MB BodySizeLimitMiddleware.
+	request_body {
+		max_size 30MB
+	}
+
 	reverse_proxy api:8000
 
 	# Pass the real client IP through so the app's rate limiter keys correctly

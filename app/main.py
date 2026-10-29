@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimiter
 from fastapi_users.jwt import decode_jwt
@@ -105,6 +106,12 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+# --- Request size limit ------------------------------------------------------
+# Rejects bodies whose Content-Length exceeds 30 MB before multipart parsing.
+# Registered before CORS so it sits inside it and a 413 still carries CORS
+# headers (the browser can then show the real error).
+app.add_middleware(BodySizeLimitMiddleware)
 
 # --- CORS --------------------------------------------------------------------
 # With allow_credentials=True, allow_origins CANNOT be ["*"] (browsers reject

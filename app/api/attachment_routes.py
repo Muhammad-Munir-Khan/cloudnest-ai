@@ -19,8 +19,10 @@ import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -149,7 +151,7 @@ async def extract(
                    "Per-user document upload coming in Phase 2c.",
         )
 
-    data = await file.read()
+    data = await read_upload_limited(file, MAX_UPLOAD_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
 
@@ -160,8 +162,9 @@ async def extract(
     # tools can find it even if extraction later fails. Best-effort.
     _save_to_user_workspace(user, file.filename, data)
 
+    # PDF parsing and vision OCR are blocking (CPU + provider HTTP calls).
     try:
-        result = extract_attachment(file.filename, data)
+        result = await run_in_threadpool(extract_attachment, file.filename, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -178,7 +181,7 @@ async def extract(
         # Trigger background re-ingest. Synchronous is fine for small corpora.
         try:
             from app.rag.ingestion import ingest
-            ingest()
+            await run_in_threadpool(ingest)
         except Exception as e:
             log.warning("re-ingest after persist failed: %s", e)
 

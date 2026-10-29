@@ -3,8 +3,10 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
+from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -15,6 +17,8 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 ALLOWED_AUDIO_EXT = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac"}
+# Mic recordings are small; this only stops abusive uploads.
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)
@@ -33,7 +37,7 @@ async def transcribe(
                    f"Allowed: {sorted(ALLOWED_AUDIO_EXT)}",
         )
 
-    data = await file.read()
+    data = await read_upload_limited(file, MAX_AUDIO_BYTES)
     if not data:
         raise HTTPException(status_code=400, detail="Empty audio file")
 
@@ -43,7 +47,8 @@ async def transcribe(
 
     try:
         from app.voice.stt import transcribe_file
-        result = transcribe_file(tmp_path)
+        # Whisper inference is CPU-bound; keep it off the event loop.
+        result = await run_in_threadpool(transcribe_file, tmp_path)
     except Exception as e:
         log.exception("transcription failed")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
