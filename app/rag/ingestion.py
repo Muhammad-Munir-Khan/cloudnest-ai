@@ -1,7 +1,7 @@
 """Ingest documents (PDF + text) into per-user Weaviate tenants."""
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from langchain_community.document_loaders import (
     Docx2txtLoader,

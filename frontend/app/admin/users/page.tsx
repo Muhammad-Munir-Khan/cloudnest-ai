@@ -76,7 +76,7 @@ export default function AdminUsersPage() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let rows = q
+    const rows = q
       ? users.filter(
           (u) =>
             u.email.toLowerCase().includes(q) ||
@@ -433,7 +433,7 @@ export default function AdminUsersPage() {
                   colSpan={5}
                   className="px-4 py-8 text-center text-sm text-[var(--fg-tertiary)]"
                 >
-                  No users match "{query}".
+                  No users match &ldquo;{query}&rdquo;.
                 </td>
               </tr>
             )}

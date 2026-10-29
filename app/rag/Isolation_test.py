@@ -15,13 +15,14 @@ Or copy this file to app/rag/isolation_test.py and run as a module.
 """
 import uuid
 
+from langchain_core.documents import Document
+
 from app.rag.collections import (
     add_documents_for,
     count_for,
     delete_user_collection,
     search_for,
 )
-from langchain_core.documents import Document
 
 
 def main() -> None:

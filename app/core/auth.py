@@ -23,9 +23,10 @@ Account suspension at login:
 """
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
+import jwt as pyjwt
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
 from fastapi_users.authentication import (
     AuthenticationBackend,
@@ -33,23 +34,20 @@ from fastapi_users.authentication import (
     CookieTransport,
     JWTStrategy,
 )
-from fastapi_users.jwt import generate_jwt
-import jwt as pyjwt
-from fastapi.security import OAuth2PasswordRequestForm
-
-from app.core.email import (
-    password_reset_email,
-    send_email,
-    password_changed_email,
-)
 from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.jwt import generate_jwt
 from httpx_oauth.clients.github import GitHubOAuth2
 from httpx_oauth.clients.google import GoogleOAuth2
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.audit import audit_event
+from app.core.config import settings
 from app.core.db import get_async_session
+from app.core.email import (
+    password_changed_email,
+    password_reset_email,
+    send_email,
+)
 from app.core.logging import get_logger
 from app.core.rate_limit import keyed_count, keyed_hit
 from app.core.roles import UserRole
@@ -145,7 +143,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
     async def authenticate(
         self, credentials: OAuth2PasswordRequestForm
-    ) -> Optional[User]:
+    ) -> User | None:
         """Override fastapi-users authenticate to detect suspended accounts.
 
         Behavior:
@@ -428,7 +426,7 @@ _current_active_user_no_freshness = fastapi_users.current_user(active=True)
 
 # --- Freshness check: rejects JWTs issued before force-logout -----------------
 
-def _extract_token(request: Request) -> Optional[str]:
+def _extract_token(request: Request) -> str | None:
     """Pull a JWT from either the Bearer header or the cookie."""
     auth = request.headers.get("Authorization", "")
     if auth.lower().startswith("bearer "):
@@ -464,7 +462,7 @@ async def _check_freshness(request: Request, user: User) -> User:
     except pyjwt.PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
-        )
+        ) from None
 
     iat = payload.get("iat")
     if iat is None:

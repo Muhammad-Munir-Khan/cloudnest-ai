@@ -33,12 +33,10 @@ Schema (generic core, used by every object):
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any
 
-import weaviate
 from langchain_core.documents import Document
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.rag.collections import get_weaviate_client
 from app.rag.embeddings import get_embeddings
@@ -59,7 +57,7 @@ def _build_schema_properties():
     searchable field. All other fields are TEXT and optional - chunks set
     only the fields that apply to them.
     """
-    from weaviate.classes.config import Property, DataType
+    from weaviate.classes.config import DataType, Property
 
     return [
         # body + filterable category
@@ -128,7 +126,7 @@ def add_to_global_corpus(items: list[dict[str, Any]]) -> int:
 
     inserted = 0
     with coll.batch.dynamic() as batch:
-        for it, vec in zip(items, vectors):
+        for it, vec in zip(items, vectors, strict=True):
             # content_type is free-form (e.g. "document", "policy", "manual", ...).
             # Default to "document" if missing; lowercased for consistent filtering.
             props = dict(it)
@@ -140,7 +138,7 @@ def add_to_global_corpus(items: list[dict[str, Any]]) -> int:
     return inserted
 
 
-def _filters_from(content_type: Optional[str]):
+def _filters_from(content_type: str | None):
     """Build a Weaviate filter from an optional content_type constraint."""
     from weaviate.classes.query import Filter
 
@@ -152,7 +150,7 @@ def _filters_from(content_type: Optional[str]):
 def global_search(
     query: str,
     k: int = 5,
-    content_type: Optional[str] = None,
+    content_type: str | None = None,
     alpha: float = 0.5,
 ) -> list[tuple[Document, float]]:
     """Hybrid (BM25 + vector) search over the global corpus.
@@ -252,7 +250,7 @@ def list_sources() -> list[dict]:
         return []
 
 
-def _peek_content_type(coll, source_title: str) -> Optional[str]:
+def _peek_content_type(coll, source_title: str) -> str | None:
     """Fetch one object from a source to read its content_type."""
     if not source_title:
         return None

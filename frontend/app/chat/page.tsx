@@ -8,11 +8,9 @@ import {
   deleteSession,
   ensembleChat,
   extractAttachment,
-  getHealth,
   getSessionMessages,
   listSessions,
   ragQuery,
-  reindex,
   renameSession,
   streamAgent,
   transcribe,
@@ -20,7 +18,6 @@ import {
 } from "@/lib/api";
 import type {
   ChatMessage,
-  HealthResponse,
   Mode,
   TraceEntry,
 } from "@/lib/types";
@@ -39,9 +36,6 @@ export default function Home() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
 
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
-
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionId, setSessionId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -54,7 +48,6 @@ export default function Home() {
   const [attaching, setAttaching] = useState(false);
 
   const [busy, setBusy] = useState(false);
-  const [reindexing, setReindexing] = useState(false);
   const [prefill, setPrefill] = useState<string | undefined>();
 
   const [liveTrace, setLiveTrace] = useState<TraceEntry[]>([]);
@@ -83,16 +76,6 @@ export default function Home() {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  const refreshHealth = useCallback(async () => {
-    try {
-      setHealthError(null);
-      setHealth(await getHealth());
-    } catch (e) {
-      setHealthError(e instanceof Error ? e.message : "Unknown error");
-      setHealth(null);
-    }
-  }, []);
-
   const refreshSessions = useCallback(async () => {
     try {
       setSessions(await listSessions());
@@ -106,14 +89,11 @@ export default function Home() {
   }, [sessionId]);
 
   useEffect(() => {
-    // Only fetch health / sessions once we know the user is authenticated;
+    // Only fetch sessions once we know the user is authenticated;
     // otherwise we'd race the redirect with a flurry of 401-and-redirect cycles.
     if (!user) return;
-    refreshHealth();
     refreshSessions();
-    const id = setInterval(refreshHealth, 15000);
-    return () => clearInterval(id);
-  }, [user, refreshHealth, refreshSessions]);
+  }, [user, refreshSessions]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({
@@ -374,19 +354,6 @@ export default function Home() {
     }
   };
 
-  const handleReindex = async () => {
-    setReindexing(true);
-    try {
-      const res = await reindex();
-      alert(res.message);
-      refreshHealth();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "Re-index failed");
-    } finally {
-      setReindexing(false);
-    }
-  };
-
   const showStreamingPlaceholder =
     busy && liveMessageId !== null && !ensembleEnabled;
   const showEnsembleLoading =
@@ -415,15 +382,10 @@ export default function Home() {
   return (
     <div className="flex min-h-screen">
       <Sidebar
-        health={health}
-        error={healthError}
         mode={mode}
         setMode={setMode}
         ensembleEnabled={ensembleEnabled}
         setEnsembleEnabled={setEnsembleEnabled}
-        onRefresh={refreshHealth}
-        onReindex={handleReindex}
-        reindexing={reindexing}
         sessions={sessions}
         activeSessionId={sessionId}
         onSelectSession={handleSelectSession}

@@ -420,6 +420,7 @@ async def delete_user(
     # statements within one session.execute scope all participate in the same
     # transaction that session.commit() seals.
     from sqlalchemy import delete as sa_delete
+
     from app.models import chat as chat_models  # chat_messages, chat_sessions
     from app.models.user import OAuthAccount
 
@@ -535,8 +536,9 @@ async def ingest_file(
     content_type is free-form: pass whatever label suits your knowledge base
     (e.g. "document", "policy", "manual", "faq", "report", ...).
     """
-    from app.rag.ingestion import SUPPORTED_EXTENSIONS, _load_one, chunk_documents
     import tempfile
+
+    from app.rag.ingestion import SUPPORTED_EXTENSIONS, _load_one, chunk_documents
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="filename required")

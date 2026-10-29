@@ -1,10 +1,9 @@
 """RAG endpoints — per-user document storage, ingestion, and retrieval."""
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
@@ -22,7 +21,7 @@ from app.rag.ingestion import (
     ingest_single_file_for_user,
     list_files_for_user,
 )
-from app.rag.user_context import set_current_user, reset_current_user
+from app.rag.user_context import reset_current_user, set_current_user
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/rag", tags=["rag"])

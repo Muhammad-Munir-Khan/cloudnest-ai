@@ -197,7 +197,7 @@ class RateLimiter:
                 return
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "rate limiter error"
-            )
+            ) from e
 
         if current > self.times:
             raise HTTPException(

@@ -19,7 +19,6 @@ from langchain_core.tools import tool
 
 from app.rag.global_collection import global_search
 
-
 # Tunable: how many KB chunks the agent sees per call.
 # Small enough not to bloat the prompt; large enough to give real coverage.
 _TOP_K = 5

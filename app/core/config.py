@@ -1,8 +1,8 @@
 """Application settings, overridable via environment variables or .env."""
 
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 

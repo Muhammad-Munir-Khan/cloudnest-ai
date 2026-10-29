@@ -3,16 +3,15 @@
 All endpoints require an authenticated user via JWT.
 """
 import json
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import storage
-from app.api.errors import error_reference, internal_error, log_error
 from app.agent.ensemble import EnsembleResponse, run_ensemble_async
 from app.agent.graph import run_agent, stream_agent
+from app.api.errors import error_reference, internal_error, log_error
 from app.core.auth import current_active_user
 from app.core.schemas import AgentRequest, AgentResponse
 from app.models.user import User

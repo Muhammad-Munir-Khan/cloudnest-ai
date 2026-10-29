@@ -602,7 +602,7 @@ def stream_agent(
                         yield {"type": "token", "delta": chunk.content}
 
             elif mode == "updates":
-                for node_name, state in payload.items():
+                for state in payload.values():
                     if not isinstance(state, dict):
                         continue
                     new_msgs = state.get("messages", [])

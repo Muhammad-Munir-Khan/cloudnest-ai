@@ -470,7 +470,7 @@ export default function KnowledgeBasePage() {
               </span>{" "}
               chunk(s) from{" "}
               <span className="text-[var(--fg-primary)] font-medium">
-                "{confirmDelete.source_title}"
+                &ldquo;{confirmDelete.source_title}&rdquo;
               </span>
               . The knowledge base will no longer return results from this
               source.

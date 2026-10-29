@@ -7,10 +7,6 @@ import jwt as pyjwt
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-
-from app.core.body_limit import BodySizeLimitMiddleware
-from app.core.security_headers import SecurityHeadersMiddleware
-from app.core.rate_limit import RateLimiter
 from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.jwt import decode_jwt
 from fastapi_users.router.oauth import generate_state_token
@@ -18,7 +14,7 @@ from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
 from sqlalchemy import text, update
 
 from app import __version__
-from app.api import agent_routes, attachment_routes, rag_routes, voice_routes, admin_routes
+from app.api import admin_routes, agent_routes, attachment_routes, rag_routes, voice_routes
 from app.core.auth import (
     AccountSuspendedError,
     cookie_backend,
@@ -29,13 +25,16 @@ from app.core.auth import (
     google_oauth_client,
     jwt_backend,
 )
+from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import settings
 from app.core.db import get_async_session
 from app.core.llm import active_model_name, active_provider
 from app.core.logging import configure_logging, get_logger
 from app.core.oauth_email import provider_email_verified
 from app.core.observability import init_sentry
+from app.core.rate_limit import RateLimiter
 from app.core.schemas_user import UserCreate, UserRead, UserUpdate
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.models.user import User
 
 configure_logging()
@@ -406,7 +405,7 @@ async def _finish_oauth(provider, request, access_token_state, user_manager):
     try:
         decode_jwt(state, settings.jwt_secret, [_OAUTH_STATE_AUDIENCE])
     except pyjwt.PyJWTError:
-        raise HTTPException(status_code=400, detail="Invalid OAuth state token.")
+        raise HTTPException(status_code=400, detail="Invalid OAuth state token.") from None
 
     client = _oauth_clients[provider]
     account_id, account_email = await client.get_id_email(token["access_token"])

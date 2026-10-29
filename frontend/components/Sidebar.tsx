@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-import type { HealthResponse, Mode } from "@/lib/types";
+import type { Mode } from "@/lib/types";
 import type { SessionInfo } from "@/lib/api";
 import type { Theme } from "@/lib/theme";
 import type { LanguageCode } from "@/lib/language";
@@ -28,15 +28,10 @@ import { UserFooter } from "./UserFooter";
 const ADMIN_ROLES = ["corpus_admin", "super_admin"];
 
 export function Sidebar({
-  health,
-  error,
   mode,
   setMode,
   ensembleEnabled,
   setEnsembleEnabled,
-  onRefresh,
-  onReindex,
-  reindexing,
   sessions,
   activeSessionId,
   onSelectSession,
@@ -48,15 +43,10 @@ export function Sidebar({
   language,
   setLanguage,
 }: {
-  health: HealthResponse | null;
-  error: string | null;
   mode: Mode;
   setMode: (m: Mode) => void;
   ensembleEnabled: boolean;
   setEnsembleEnabled: (v: boolean) => void;
-  onRefresh: () => void;
-  onReindex: () => void;
-  reindexing: boolean;
   sessions: SessionInfo[];
   activeSessionId: string;
   onSelectSession: (id: string) => void;

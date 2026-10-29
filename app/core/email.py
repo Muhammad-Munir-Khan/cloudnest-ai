@@ -264,7 +264,7 @@ def account_unsuspended_email() -> tuple[str, str, str]:
         "If you have any questions, contact your administrator."
     )
 
-    html_body = f"""\
+    html_body = """\
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#0f1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
@@ -316,7 +316,7 @@ def account_deleted_email() -> tuple[str, str, str]:
         "CloudNest again you would need to create a new account."
     )
 
-    html_body = f"""\
+    html_body = """\
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#0f1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">

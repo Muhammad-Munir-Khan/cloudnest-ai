@@ -15,8 +15,9 @@ guards that and yields a clean, informative error instead.
 """
 import asyncio
 import json
-import time
 import re
+import time
+
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -189,7 +190,7 @@ async def _judge(
         if not match:
             raise ValueError("no JSON object found in judge response")
         return json.loads(match.group(0))
-    except asyncio.TimeoutError as e:
+    except asyncio.TimeoutError:
         log.warning("judge failed: timeout after %ss", settings.ensemble_timeout_sec)
         return _judge_fallback(valid)
     except Exception as e:

@@ -82,4 +82,4 @@ def currency_converter(
     except requests.RequestException as e:
         return f"Error: currency API unavailable: {e}"
     except KeyError:
-        return f"Error: unexpected API response format"
+        return "Error: unexpected API response format"

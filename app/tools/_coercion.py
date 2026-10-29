@@ -15,7 +15,6 @@ can defend against the same class of input.
 import ast
 import operator
 
-
 _ALLOWED_OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,

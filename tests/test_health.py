@@ -17,9 +17,9 @@ def _ok():
     return check
 
 
-def _fail(exc=RuntimeError("down")):
+def _fail(exc_type=RuntimeError):
     async def check():
-        raise exc
+        raise exc_type("down")
     return check
 
 
@@ -55,7 +55,7 @@ def test_not_ready_when_postgres_fails(app_main, monkeypatch):
 def test_redis_and_weaviate_failures_only_degrade(app_main, monkeypatch):
     monkeypatch.setattr(app_main, "_check_postgres", _ok())
     monkeypatch.setattr(app_main, "_check_redis", _fail())
-    monkeypatch.setattr(app_main, "_check_weaviate", _fail(ConnectionError("x")))
+    monkeypatch.setattr(app_main, "_check_weaviate", _fail(ConnectionError))
     r = TestClient(app_main.app).get("/health/ready")
     assert r.status_code == 200
     assert r.json()["components"]["weaviate"] == "error: ConnectionError"
