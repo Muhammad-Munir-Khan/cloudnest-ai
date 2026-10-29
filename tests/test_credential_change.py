@@ -90,3 +90,12 @@ def test_superuser_update_is_not_gated():
     manager, user, _ = _setup()
     _update(manager, user, safe=False, password="Admin-set-pass-3")
     assert manager.password_helper.verify_and_update("Admin-set-pass-3", user.hashed_password)[0]
+
+
+def test_self_update_cannot_grant_superuser_or_reactivate():
+    """PATCH /users/me uses safe=True, which drops privileged fields (SEC-13)."""
+    manager, user, db = _setup()
+    _update(manager, user, is_superuser=True, is_active=True, is_verified=True,
+            display_name="Alice")
+    assert user.is_superuser is False
+    assert _stored_keys(db) == {"display_name"}

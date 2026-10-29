@@ -528,8 +528,14 @@ async def github_callback(
 # freshness check, so a revoked token could still read/patch /users/me
 # (incl. changing the password). The router-level current_active_user closes
 # that gap for every /users route.
+# Only /users/me is mounted. The built-in /users/{id} routes are gated by
+# is_superuser instead of role and skip the admin flows (session revocation on
+# block, data cleanup on delete); /admin/users/* replaces them, so role is the
+# only source of admin rights.
+_users_router = fastapi_users.get_users_router(UserRead, UserUpdate)
+_users_router.routes = [r for r in _users_router.routes if r.path == "/me"]
 app.include_router(
-    fastapi_users.get_users_router(UserRead, UserUpdate),
+    _users_router,
     prefix="/users",
     tags=["users"],
     dependencies=[

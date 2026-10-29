@@ -6,8 +6,9 @@ Three tiers (source of truth = the `role` column on User):
   super_admin  - everything corpus_admin can do, PLUS user/role management
 
 `is_superuser` (fastapi-users built-in) is kept auto-synced: a user is a
-superuser iff role == super_admin. That keeps fastapi-users' own superuser
-checks consistent while `role` drives our finer-grained gating.
+superuser iff role == super_admin. Nothing authorizes on it: the
+fastapi-users /users/{id} routes that did are not mounted, so `role` is the
+only source of admin rights.
 
 This deliberately uses a single `role` field rather than a full
 permissions table. If granular per-permission control is needed later, this

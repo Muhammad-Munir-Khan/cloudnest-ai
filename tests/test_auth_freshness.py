@@ -49,6 +49,14 @@ def test_users_routes_are_covered():
         assert current_active_user in _dependency_calls(r.dependant), r.path
 
 
+def test_only_users_me_is_exposed():
+    """/users/{id} was gated by is_superuser, not role (SEC-13)."""
+    from app.main import app
+
+    paths = {r.path for r in app.routes if isinstance(r, APIRoute) and r.path.startswith("/users")}
+    assert paths == {"/users/me"}
+
+
 def _token(iat: datetime) -> str:
     payload = {
         "sub": str(uuid.uuid4()),
