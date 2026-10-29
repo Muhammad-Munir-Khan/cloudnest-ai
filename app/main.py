@@ -15,7 +15,7 @@ from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.jwt import decode_jwt
 from fastapi_users.router.oauth import generate_state_token
 from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
-from sqlalchemy import update
+from sqlalchemy import text, update
 
 from app import __version__
 from app.api import agent_routes, attachment_routes, rag_routes, voice_routes, admin_routes
@@ -542,7 +542,12 @@ app.include_router(
 
 @app.get("/health")
 def health():
-    """Public health check."""
+    """Public health check (backward-compatible; used by the Docker healthcheck).
+
+    For orchestrators, prefer the split probes below:
+      - /health/live  -> liveness  (restart the container if this fails)
+      - /health/ready -> readiness (stop routing traffic if this fails)
+    """
     return {
         "status": "ok",
         "version": __version__,
@@ -553,6 +558,89 @@ def health():
         "tts_backend": settings.tts_backend,
         "indexed": None,
     }
+
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness probe: the process is up and the event loop is responsive.
+
+    Deliberately checks NOTHING external — a liveness failure tells the
+    orchestrator to RESTART the container, and we don't want a transient
+    database blip to trigger pointless restart loops. Only a truly wedged
+    process should fail this.
+    """
+    return {"status": "alive", "version": __version__}
+
+
+# --- Readiness sub-checks -----------------------------------------------------
+# Each returns a short status string and is allowed to raise; the readiness
+# handler wraps every call in its own timeout + try/except so one slow or
+# broken dependency can neither hang nor crash the probe.
+
+async def _check_postgres() -> str:
+    async for session in get_async_session():
+        await session.execute(text("SELECT 1"))
+        break
+    return "ok"
+
+
+async def _check_redis() -> str:
+    from app.core.rate_limit import _get_redis
+    r = _get_redis()
+    if r is None:
+        return "not configured"
+    await r.ping()
+    return "ok"
+
+
+async def _check_weaviate() -> str:
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        resp = await client.get(f"{settings.weaviate_url}/v1/.well-known/ready")
+        return "ok" if resp.status_code == 200 else f"status {resp.status_code}"
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness probe: can this instance serve traffic right now?
+
+    Checks the hard dependency (Postgres) plus informational sub-checks (Redis,
+    Weaviate). Returns 503 if Postgres is unreachable so an orchestrator stops
+    routing traffic to this instance until it recovers. Redis failing is
+    non-fatal (rate limiting fails open); Weaviate failing only degrades RAG.
+
+    Bulletproofing: every sub-check is independently bounded by its own timeout
+    and wrapped so it can only ever resolve to a status string — a hung or
+    throwing dependency degrades to "error: ..." instead of hanging or 500ing
+    the probe. The whole handler is additionally guarded so it always returns a
+    well-formed 200 or 503, never an unhandled exception.
+    """
+    # (name, coroutine factory, timeout seconds, is-critical)
+    checks = (
+        ("postgres", _check_postgres, 5.0, True),
+        ("redis", _check_redis, 3.0, False),
+        ("weaviate", _check_weaviate, 4.0, False),
+    )
+
+    components: dict[str, str] = {}
+    critical_ok = True
+
+    import asyncio
+
+    for name, factory, timeout, critical in checks:
+        try:
+            components[name] = await asyncio.wait_for(factory(), timeout=timeout)
+        except asyncio.TimeoutError:
+            components[name] = "error: timeout"
+        except Exception as e:  # noqa: BLE001 - readiness must never propagate
+            components[name] = f"error: {type(e).__name__}"
+
+        if critical and components.get(name) != "ok":
+            critical_ok = False
+
+    payload = {"status": "ready" if critical_ok else "not ready", "components": components}
+    if not critical_ok:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
 
 
 @app.get("/")
