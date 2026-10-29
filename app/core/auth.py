@@ -84,9 +84,43 @@ async def get_user_db(session: AsyncSession = Depends(get_async_session)):
 
 # --- User manager ---
 
+# Server-side password policy. The frontend checks the minimum too, but the
+# API must enforce it for direct API clients. The maximum bounds the cost of
+# hashing attacker-supplied input.
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 128
+
+
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     reset_password_token_secret = settings.jwt_secret
     verification_token_secret = settings.jwt_secret
+
+    async def validate_password(self, password: str, user) -> None:
+        """Reject weak passwords on register, update and reset.
+
+        fastapi-users calls this from create(), update() and reset_password();
+        raising InvalidPasswordException becomes a 400 with code
+        REGISTER_/UPDATE_USER_/RESET_PASSWORD_INVALID_PASSWORD.
+        """
+        from fastapi_users.exceptions import InvalidPasswordException
+
+        if len(password) < PASSWORD_MIN_LENGTH:
+            raise InvalidPasswordException(
+                reason=f"Password must be at least {PASSWORD_MIN_LENGTH} characters."
+            )
+        if len(password) > PASSWORD_MAX_LENGTH:
+            raise InvalidPasswordException(
+                reason=f"Password must be at most {PASSWORD_MAX_LENGTH} characters."
+            )
+        if not password.strip():
+            raise InvalidPasswordException(reason="Password cannot be only whitespace.")
+        email = (getattr(user, "email", "") or "").lower()
+        local_part = email.split("@")[0]
+        lowered = password.lower()
+        if email and (email in lowered or (len(local_part) >= 3 and local_part in lowered)):
+            raise InvalidPasswordException(
+                reason="Password must not contain your email address."
+            )
 
     async def _sync_superuser_flag(self, user: User) -> None:
         """Mirror is_superuser from role (super_admin <-> is_superuser=True).

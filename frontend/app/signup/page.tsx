@@ -117,7 +117,8 @@ export default function SignupPage() {
       router.push("/chat");
     } catch (err) {
       if (err instanceof AuthError) {
-        if (err.message?.toLowerCase().includes("already exists")) {
+        // Backend sends the code REGISTER_USER_ALREADY_EXISTS (underscores).
+        if (/already[ _]exists/i.test(err.message ?? "")) {
           setError("An account with that email already exists.");
           setErrorKind("exists");
         } else {

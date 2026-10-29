@@ -84,7 +84,9 @@ export async function register(
     let detail = "Registration failed";
     try {
       const j = await res.json();
-      detail = typeof j.detail === "string" ? j.detail : detail;
+      // Password-policy errors arrive as {code, reason}; others as a string.
+      if (typeof j.detail === "string") detail = j.detail;
+      else if (typeof j.detail?.reason === "string") detail = j.detail.reason;
     } catch {
       /* noop */
     }

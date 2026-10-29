@@ -129,6 +129,14 @@ function ResetPasswordForm() {
         if (typeof reason === "string" && reason.includes("RESET_PASSWORD_BAD_TOKEN")) {
           setError("This reset link is invalid or has expired. Request a new one.");
           setErrorKind("bad-token");
+        } else if (reason?.code === "RESET_PASSWORD_INVALID_PASSWORD") {
+          // Server-side password policy: {code, reason}.
+          setError(
+            typeof reason.reason === "string"
+              ? reason.reason
+              : "Password doesn't meet requirements.",
+          );
+          setErrorKind("validation");
         } else if (typeof reason === "string" && reason.includes("PASSWORD")) {
           setError("Password doesn't meet requirements. Use at least 8 characters.");
           setErrorKind("validation");
