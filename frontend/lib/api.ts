@@ -278,11 +278,9 @@ export async function ensembleChat(
 
 export async function extractAttachment(
   file: File,
-  persist = false,
 ): Promise<AttachmentResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("persist", persist ? "true" : "false");
 
   const res = await apiFetch(`${API_URL}/attachments/extract`, {
     method: "POST",

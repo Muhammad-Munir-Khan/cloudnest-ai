@@ -16,7 +16,6 @@ from app.rag.collections import docs_dir_for
 from app.rag.ingestion import (
     SUPPORTED_EXTENSIONS,
     delete_file_from_user,
-    ingest,
     ingest_for_user,
     ingest_single_file_for_user,
     list_files_for_user,
@@ -163,30 +162,4 @@ def reindex_my_docs(user: User = Depends(current_active_user)):
         chunks_indexed=result["chunks"],
         files_processed=result["files"],
         message=f"Re-indexed {result['chunks']} chunks from {result['files']} files.",
-    )
-
-
-# --- Superuser-only legacy endpoint ------------------------------------------
-
-@router.post("/ingest", response_model=IngestResponse)
-def run_global_ingestion(user: User = Depends(current_active_user)):
-    """Re-index data/docs/ (root) into a global 'documents' collection.
-
-    Restricted to superusers. This is the old shared-corpus model — kept for
-    backwards compat but no normal users hit it.
-    """
-    if not user.is_superuser:
-        raise HTTPException(
-            status_code=403,
-            detail="Only admins can trigger global re-ingestion. "
-                   "Use POST /rag/documents to upload your own files.",
-        )
-    try:
-        result = ingest()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="No documents to ingest.") from None
-    return IngestResponse(
-        chunks_indexed=result["chunks"],
-        files_processed=result["files"],
-        message=f"Indexed {result['chunks']} chunks from {result['files']} files.",
     )

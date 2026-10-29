@@ -145,25 +145,6 @@ def list_files_for_user(user_id: str | uuid.UUID) -> list[dict]:
     return files
 
 
-# --- Legacy global ingestion (superuser-only fallback) ---
-
-def ingest() -> dict:
-    """Legacy global ingestion. Now reserved for superuser /rag/ingest endpoint.
-
-    Uses a fixed 'global' tenant rather than the old 'documents' collection so
-    it fits the multi-tenant model. Reads from settings.docs_dir root.
-    """
-    log.info("LEGACY global ingest from %s", settings.docs_dir)
-    docs, n_files = load_documents(settings.docs_dir)
-    chunks = chunk_documents(docs)
-    # Reuse the per-user machinery with a sentinel "global" user namespace.
-    GLOBAL_NS = uuid.UUID(int=0)  # 00000000-0000-0000-0000-000000000000
-    delete_user_collection(GLOBAL_NS)
-    ensure_tenant(GLOBAL_NS)
-    add_documents_for(GLOBAL_NS, chunks)
-    return {"files": n_files, "chunks": len(chunks)}
-
-
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:

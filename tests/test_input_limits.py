@@ -119,7 +119,7 @@ def test_admin_schema_bounds():
 
 # Blocking helpers that must not be called directly from an async handler.
 BLOCKING = {
-    "ingest", "ingest_single_file_for_user", "extract_attachment", "transcribe_file",
+    "ingest_single_file_for_user", "extract_attachment", "transcribe_file",
     "add_to_global_corpus", "global_corpus_count", "global_search", "list_sources",
     "delete_by_source", "delete_user_collection", "delete_user_docs_dir",
     "delete_user_workspace_dir",

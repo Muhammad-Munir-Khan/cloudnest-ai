@@ -24,13 +24,6 @@ def main() -> int:
     if r.status_code != 200:
         failures += 1
 
-    step("POST /rag/ingest")
-    r = requests.post(f"{API}/rag/ingest", timeout=600)
-    print(r.status_code, r.json() if r.status_code < 400 else r.text)
-    if r.status_code != 200:
-        print("⚠ ingestion failed — make sure data/docs/ has at least one file")
-        failures += 1
-
     step("POST /rag/query")
     r = requests.post(
         f"{API}/rag/query",

@@ -460,7 +460,6 @@ Per-user document indexing and retrieval. Every endpoint operates on the authent
 | POST   | `/rag/documents`                | Upload + index a document (PDF, TXT, MD, DOCX, image) into the user's tenant |
 | DELETE | `/rag/documents/{filename}`     | Remove a document from the user's tenant                 |
 | POST   | `/rag/reindex`                  | Re-index every file in the user's docs folder (useful after embedding model changes) |
-| POST   | `/rag/ingest`                   | Run global ingestion routine — administrative utility for bulk-loading content. Auth-gated; check route source for current scope. |
 
 **Honest notes:**
 - `/rag/query` always queries **both** personal docs and the shared knowledge base in a merged top-k retrieval. Source objects carry an `origin` field (`"personal"` or `"knowledge_base"`) so the UI can render distinct badges. This is different from the agent flow, where the LLM picks per-turn whether to call `document_search` or `knowledge_base_search`.

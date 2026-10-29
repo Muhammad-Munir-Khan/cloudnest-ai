@@ -1,4 +1,4 @@
-"""Attachment endpoints: extract text, optionally persist to docs. Auth required.
+"""Attachment endpoints: extract text. Auth required.
 
 Only the extracted text is returned to the client; the raw upload is not kept
 on disk (it used to be copied to data/repl_workspace/<user_hex>/ for
@@ -16,14 +16,13 @@ request is rejected first.
 """
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.user import User
 from app.rag.extraction import extract_attachment
@@ -94,27 +93,16 @@ class ExtractResponse(BaseModel):
 @router.post("/extract", response_model=ExtractResponse)
 async def extract(
     file: UploadFile = File(...),
-    persist: bool = Form(False),
     user: User = Depends(current_active_user),
 ):
-    """Extract text from an uploaded file. Optionally persist into data/docs.
+    """Extract text from an uploaded file.
 
     The raw bytes are only held in memory for extraction; nothing is written
-    to disk unless persist=True (superusers only).
-
-    NOTE: `persist=True` re-indexes the SHARED corpus, which all users currently
-    query. To prevent random users from polluting it, persist+reindex is now
-    restricted to superusers.
+    to disk. Documents for retrieval go through /rag/documents (per user) or
+    /admin/corpus/* (shared corpus).
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="filename required")
-
-    if persist and not user.is_superuser:
-        raise HTTPException(
-            status_code=403,
-            detail="Only admins can persist documents to the shared corpus. "
-                   "Per-user document upload coming in Phase 2c.",
-        )
 
     data = await read_upload_limited(file, MAX_UPLOAD_BYTES)
     if not data:
@@ -136,18 +124,6 @@ async def extract(
         ) from e
     except Exception as e:
         raise internal_error("Extraction failed", e) from e
-
-    if persist:
-        # Save the original file into data/docs and re-index.
-        target = settings.docs_dir / Path(file.filename).name
-        target.write_bytes(data)
-        log.info("persisted attachment to %s", target)
-        # Trigger background re-ingest. Synchronous is fine for small corpora.
-        try:
-            from app.rag.ingestion import ingest
-            await run_in_threadpool(ingest)
-        except Exception as e:
-            log.warning("re-ingest after persist failed: %s", e)
 
     return ExtractResponse(
         filename=file.filename,

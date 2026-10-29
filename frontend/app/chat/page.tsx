@@ -156,7 +156,7 @@ export default function Home() {
   const handleAttachFile = async (file: File) => {
     setAttaching(true);
     try {
-      const result = await extractAttachment(file, false);
+      const result = await extractAttachment(file);
       setPendingAttachment({
         name: result.filename,
         text: result.text,
