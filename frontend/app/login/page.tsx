@@ -8,6 +8,7 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { ThemeToggleIcon } from "@/components/ThemeToggleIcon";
 import { AuthError } from "@/lib/auth";
+import { safeRedirectPath } from "@/lib/redirect";
 import { OAuthButtons } from "@/components/OAuthButtons";
 
 /* ============================================================================
@@ -92,7 +93,9 @@ function LoginForm() {
   const [errorKind, setErrorKind] = useState<"bad-creds" | "suspended" | "network">("bad-creds");
   const [submitting, setSubmitting] = useState(false);
 
-  const next = searchParams.get("next") || "/chat";
+  // Only same-origin paths: ?next= comes from the URL and could otherwise
+  // send the user to another site after login (open redirect).
+  const next = safeRedirectPath(searchParams.get("next"));
   const urlError = searchParams.get("error");
 
   /* If the user arrived with ?error=... in the URL (e.g. OAuth-suspended
