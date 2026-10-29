@@ -18,3 +18,6 @@ class UserCreate(schemas.BaseUserCreate):
 
 class UserUpdate(schemas.BaseUserUpdate):
     display_name: str | None = None
+    # Required by PATCH /users/me when changing email or password, so a
+    # stolen session token alone cannot take over the account. Never stored.
+    current_password: str | None = None

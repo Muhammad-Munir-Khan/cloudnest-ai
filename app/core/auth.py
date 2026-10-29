@@ -206,6 +206,36 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
             user, {"jwt_invalidated_at": datetime.now(timezone.utc)}
         )
 
+    async def update(self, user_update, user: User, safe: bool = False, request=None):
+        """Require the current password for self-service credential changes.
+
+        safe=True is the PATCH /users/me path. Changing the password, or the
+        email to a different address, needs `current_password`, so a stolen
+        session token alone cannot take over the account. Superuser updates
+        (safe=False) and display-name-only changes are unaffected. Accounts
+        created via OAuth have no known password; they can set one through the
+        forgot-password flow first.
+        """
+        from fastapi_users.exceptions import InvalidPasswordException
+
+        changes_password = getattr(user_update, "password", None) is not None
+        new_email = getattr(user_update, "email", None)
+        changes_email = new_email is not None and str(new_email).lower() != user.email.lower()
+        if safe and (changes_password or changes_email):
+            current = getattr(user_update, "current_password", None) or ""
+            verified, _ = self.password_helper.verify_and_update(current, user.hashed_password)
+            if not verified:
+                audit_event("credentials.change", actor=user.email, status="failure",
+                            reason="bad_current_password")
+                raise InvalidPasswordException(reason="Current password is incorrect.")
+
+        # current_password is request-only: never pass it on to the update.
+        if "current_password" in user_update.model_fields_set:
+            user_update = type(user_update)(
+                **user_update.model_dump(exclude_unset=True, exclude={"current_password"})
+            )
+        return await super().update(user_update, user, safe=safe, request=request)
+
     async def on_after_update(self, user: User, update_dict: dict, request=None):
         # If an admin changed the user's role, keep is_superuser consistent.
         if "role" in update_dict:
