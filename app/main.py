@@ -509,10 +509,15 @@ async def github_callback(
 
 
 # --- User management routes --------------------------------------------------
+# fastapi-users' own dependencies on these routes skip the force-logout
+# freshness check, so a revoked token could still read/patch /users/me
+# (incl. changing the password). The router-level current_active_user closes
+# that gap for every /users route.
 app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",
     tags=["users"],
+    dependencies=[Depends(current_active_user)],
 )
 
 

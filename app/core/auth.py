@@ -163,10 +163,24 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
                     "could not send verification email for %s: %s", user.email, e
                 )
 
+    async def _invalidate_existing_tokens(self, user: User) -> None:
+        """Revoke every JWT issued before now (same mechanism as force-logout).
+
+        Used after a password change/reset so a stolen session token stops
+        working; the user simply logs in again with the new password.
+        """
+        await self.user_db.update(
+            user, {"jwt_invalidated_at": datetime.now(timezone.utc)}
+        )
+
     async def on_after_update(self, user: User, update_dict: dict, request=None):
         # If an admin changed the user's role, keep is_superuser consistent.
         if "role" in update_dict:
             await self._sync_superuser_flag(user)
+        if update_dict.get("password"):
+            log.info("password updated for %s; revoking existing sessions", user.email)
+            audit_event("password.change", actor=user.email)
+            await self._invalidate_existing_tokens(user)
 
     async def on_after_forgot_password(self, user: User, token: str, request=None):
         log.info("password reset requested for %s", user.email)
@@ -209,6 +223,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_reset_password(self, user: User, request=None):
         log.info("password changed for %s", user.email)
         audit_event("password.reset", actor=user.email)
+        await self._invalidate_existing_tokens(user)
         when = datetime.now(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
         subject, html_body, text_body = password_changed_email(when)
         await send_email(user.email, subject, html_body, text_body)
