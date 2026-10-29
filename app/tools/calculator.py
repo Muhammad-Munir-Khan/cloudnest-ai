@@ -1,9 +1,28 @@
 """Tool: a safe arithmetic calculator using a restricted AST evaluator."""
 import ast
+import math
 import operator as op
 import re
 
 from langchain_core.tools import tool
+
+# Integer powers are exact and unbounded in Python, so "9 ** 9 ** 9" would
+# pin a worker for a very long time. Cap the result size (~3,000 digits,
+# below Python's 4,300-digit int->str limit) before computing.
+_MAX_POW_BITS = 10_000
+
+
+def _safe_pow(base, exponent):
+    if (
+        isinstance(base, int)
+        and isinstance(exponent, int)
+        and exponent > 0
+        and abs(base) > 1
+        and exponent * math.log2(abs(base)) > _MAX_POW_BITS
+    ):
+        raise ValueError("result too large (exponent out of range)")
+    return op.pow(base, exponent)
+
 
 # Whitelist of safe AST node types and operators.
 _OPS = {
@@ -13,7 +32,7 @@ _OPS = {
     ast.Div: op.truediv,
     ast.FloorDiv: op.floordiv,
     ast.Mod: op.mod,
-    ast.Pow: op.pow,
+    ast.Pow: _safe_pow,
     ast.USub: op.neg,
     ast.UAdd: op.pos,
 }

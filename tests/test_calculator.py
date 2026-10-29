@@ -22,6 +22,23 @@ def test_pow():
     assert calculator.invoke({"expression": "2 ** 10"}) == "1024"
 
 
+def test_pow_large_but_allowed():
+    assert calculator.invoke({"expression": "2 ** 1000"}) == str(2 ** 1000)
+    assert calculator.invoke({"expression": "2 ** -1"}) == "0.5"
+    assert calculator.invoke({"expression": "(-1) ** 1000001"}) == "-1"
+
+
+def test_pow_huge_exponent_rejected_fast():
+    import time
+
+    for expr in ("9 ** 9 ** 9", "10 ** 100000", "(10 ** 3000) ** 4"):
+        t0 = time.perf_counter()
+        out = calculator.invoke({"expression": expr})
+        assert out.startswith("Error:"), (expr, out)
+        assert "too large" in out
+        assert time.perf_counter() - t0 < 1.0
+
+
 def test_zero_division_safe():
     assert "division by zero" in calculator.invoke({"expression": "1 / 0"}).lower()
 
