@@ -183,7 +183,10 @@ app.include_router(
     attachment_routes.router,
     dependencies=[Depends(RateLimiter(times=30, seconds=60, scope="attachments"))],
 )
-app.include_router(admin_routes.router)
+app.include_router(
+    admin_routes.router,
+    dependencies=[Depends(RateLimiter(times=120, seconds=60, scope="admin"))],
+)
 # --- Auth routes -------------------------------------------------------------
 # Two login backends mounted under different prefixes:
 #   POST /auth/jwt/login     -> returns {access_token, token_type} JSON (for API/curl)
@@ -220,15 +223,19 @@ app.include_router(
     tags=["auth"],
     dependencies=[Depends(RateLimiter(times=5, seconds=60, scope="register"))],
 )
+# Both routers can trigger outgoing email (forgot-password, request-verify-
+# token), so they are throttled to curb email flooding and token guessing.
 app.include_router(
     fastapi_users.get_reset_password_router(),
     prefix="/auth",
     tags=["auth"],
+    dependencies=[Depends(RateLimiter(times=5, seconds=60, scope="password_reset"))],
 )
 app.include_router(
     fastapi_users.get_verify_router(UserRead),
     prefix="/auth",
     tags=["auth"],
+    dependencies=[Depends(RateLimiter(times=5, seconds=60, scope="verify"))],
 )
 
 # =============================================================================
@@ -476,14 +483,17 @@ async def _finish_oauth(provider, request, access_token_state, user_manager):
     return redirect
 
 
+_OAUTH_LIMIT = [Depends(RateLimiter(times=20, seconds=60, scope="oauth"))]
+
+
 # --- Google ---
 
-@app.get("/auth/google/authorize", tags=["auth"])
+@app.get("/auth/google/authorize", tags=["auth"], dependencies=_OAUTH_LIMIT)
 async def google_authorize() -> dict:
     return await _start_oauth("google")
 
 
-@app.get("/auth/google/callback", tags=["auth"])
+@app.get("/auth/google/callback", tags=["auth"], dependencies=_OAUTH_LIMIT)
 async def google_callback(
     request: Request,
     access_token_state=Depends(_oauth_callbacks["google"]),
@@ -494,12 +504,12 @@ async def google_callback(
 
 # --- GitHub ---
 
-@app.get("/auth/github/authorize", tags=["auth"])
+@app.get("/auth/github/authorize", tags=["auth"], dependencies=_OAUTH_LIMIT)
 async def github_authorize() -> dict:
     return await _start_oauth("github")
 
 
-@app.get("/auth/github/callback", tags=["auth"])
+@app.get("/auth/github/callback", tags=["auth"], dependencies=_OAUTH_LIMIT)
 async def github_callback(
     request: Request,
     access_token_state=Depends(_oauth_callbacks["github"]),
@@ -517,7 +527,10 @@ app.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate),
     prefix="/users",
     tags=["users"],
-    dependencies=[Depends(current_active_user)],
+    dependencies=[
+        Depends(current_active_user),
+        Depends(RateLimiter(times=60, seconds=60, scope="users")),
+    ],
 )
 
 

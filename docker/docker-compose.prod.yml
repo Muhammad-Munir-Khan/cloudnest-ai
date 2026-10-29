@@ -52,6 +52,10 @@ services:
       # Credentials for the locked-down data services below.
       REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
       WEAVIATE_API_KEY: ${WEAVIATE_API_KEY:?set WEAVIATE_API_KEY}
+      # Caddy reaches the API over the private Docker network; only requests
+      # from these ranges may supply X-Forwarded-For for rate limiting. Safe
+      # here because the API publishes no ports in production.
+      TRUSTED_PROXIES: 172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
 
   # Don't expose the frontend port publicly in prod; Caddy proxies to it.
   frontend:

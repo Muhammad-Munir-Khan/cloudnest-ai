@@ -1,8 +1,9 @@
 """Redis-backed rate limiting for FastAPI.
 
 A fixed-window counter keyed by the authenticated user id when available,
-otherwise the client IP (first hop of X-Forwarded-For when behind a proxy).
-Used as a route dependency:
+otherwise the client IP. X-Forwarded-For is only honoured when the direct peer
+is a trusted proxy (TRUSTED_PROXIES); otherwise any client could rotate the
+header to dodge limits. Used as a route dependency:
 
     from app.core.rate_limit import RateLimiter
 
@@ -24,15 +25,21 @@ Design choices:
 Config via env (override in .env; can be promoted into config.py later):
   REDIS_URL                 default redis://redis:6379/0
   RATE_LIMIT_FAIL_OPEN      default "true"
+  TRUSTED_PROXIES           comma-separated IPs/CIDRs of reverse proxies whose
+                            X-Forwarded-For may be trusted (settings field
+                            trusted_proxies; default empty = trust none)
 
 Requires the `redis` package (redis-py, async client): add `redis>=5` to
 requirements.txt, and a `redis` service to docker-compose (see README/below).
 """
+import ipaddress
 import os
 import time
+from functools import lru_cache
 
 from fastapi import HTTPException, Request, status
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -58,25 +65,59 @@ def _get_redis():
     return _redis
 
 
+@lru_cache(maxsize=1)
+def _trusted_networks() -> tuple:
+    """Parse settings.trusted_proxies once into ip_network objects."""
+    nets = []
+    for raw in (settings.trusted_proxies or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            log.warning("ignoring invalid TRUSTED_PROXIES entry %r", raw)
+    return tuple(nets)
+
+
+def _is_trusted_proxy(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in _trusted_networks())
+
+
+def _client_ip(request: Request) -> str:
+    """Real client IP, honouring X-Forwarded-For only from trusted proxies.
+
+    If the direct peer is not a trusted proxy, its address is the client and
+    any X-Forwarded-For header is ignored (it is client-controlled). If it is
+    trusted, walk the X-Forwarded-For chain from the right (nearest hop) and
+    return the first address that is not itself a trusted proxy.
+    """
+    peer = request.client.host if request.client else "unknown"
+    xff = request.headers.get("x-forwarded-for")
+    if not xff or not _is_trusted_proxy(peer):
+        return peer
+    hops = [h.strip() for h in xff.split(",") if h.strip()]
+    for hop in reversed(hops):
+        if not _is_trusted_proxy(hop):
+            return hop
+    return hops[0] if hops else peer
+
+
 def _client_key(request: Request) -> str:
     """Identify the caller: authenticated user if present, else client IP.
 
-    request.state.user is populated by the auth dependency when a route is
-    authenticated. For public routes (login, register) we fall back to IP. When
-    behind a reverse proxy / load balancer, the real client IP is the first hop
-    of X-Forwarded-For (the proxy MUST be trusted to set this correctly).
+    request.state.user is honoured if something sets it; router-level limiter
+    dependencies run before authentication, so in practice keying is by IP.
     """
     user = getattr(request.state, "user", None)
     user_id = getattr(user, "id", None) if user is not None else None
     if user_id is not None:
         return f"user:{user_id}"
-
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        ip = xff.split(",")[0].strip()
-    else:
-        ip = request.client.host if request.client else "unknown"
-    return f"ip:{ip}"
+    return f"ip:{_client_ip(request)}"
 
 
 class RateLimiter:

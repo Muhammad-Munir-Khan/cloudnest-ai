@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # the production compose overlay, which disables anonymous access.
     weaviate_api_key: str | None = None
 
+    # Comma-separated IPs/CIDRs of reverse proxies allowed to set
+    # X-Forwarded-For for rate limiting. Empty = trust none (use peer address).
+    trusted_proxies: str = ""
+
     REDIS_URL : str
     COOKIE_SECURE :bool  # true in production (HTTPS)
     REQUIRE_EMAIL_VERIFICATION :bool # true in production once SMTP works
