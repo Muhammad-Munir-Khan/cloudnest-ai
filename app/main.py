@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 import httpx
 import jwt as pyjwt
@@ -10,6 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimiter
+from fastapi_users import exceptions as fu_exceptions
 from fastapi_users.jwt import decode_jwt
 from fastapi_users.router.oauth import generate_state_token
 from httpx_oauth.integrations.fastapi import OAuth2AuthorizeCallback
@@ -31,6 +33,7 @@ from app.core.config import settings
 from app.core.db import get_async_session
 from app.core.llm import active_model_name, active_provider
 from app.core.logging import configure_logging, get_logger
+from app.core.oauth_email import provider_email_verified
 from app.core.observability import init_sentry
 from app.core.schemas_user import UserCreate, UserRead, UserUpdate
 from app.models.user import User
@@ -414,17 +417,37 @@ async def _finish_oauth(provider, request, access_token_state, user_manager):
             detail="OAuth provider did not return an email address.",
         )
 
-    user = await user_manager.oauth_callback(
-        provider,
-        token["access_token"],
-        account_id,
-        account_email,
-        token.get("expires_at"),
-        token.get("refresh_token"),
-        request,
-        associate_by_email=True,
-        is_verified_by_default=True,
+    # Only a provider-verified address may be linked to an existing account
+    # or mark the user as verified; otherwise anyone could add a victim's
+    # address to their provider account and sign in as the victim.
+    email_verified = await provider_email_verified(
+        provider, token["access_token"], account_email
     )
+    try:
+        user = await user_manager.oauth_callback(
+            provider,
+            token["access_token"],
+            account_id,
+            account_email,
+            token.get("expires_at"),
+            token.get("refresh_token"),
+            request,
+            associate_by_email=email_verified,
+            is_verified_by_default=email_verified,
+        )
+    except fu_exceptions.UserAlreadyExists:
+        log.warning(
+            "refused to link unverified %s email to existing account %s",
+            provider, account_email,
+        )
+        message = (
+            "An account with this email already exists. Sign in with your "
+            "password, or verify this email address with your sign-in provider."
+        )
+        return RedirectResponse(
+            url=f"{settings.frontend_url}/login?error={quote(message)}",
+            status_code=302,
+        )
 
     # Populate display_name from provider on FIRST signup only. If the user
     # already has a name set (manual edit or a prior OAuth login that fetched
