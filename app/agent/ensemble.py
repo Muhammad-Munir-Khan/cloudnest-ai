@@ -182,14 +182,17 @@ async def _judge(
             ),
             timeout=settings.ensemble_timeout_sec,
         )
-        raw = _content_of(response) or "{}"
+        raw = _content_of(response)
         # Strip any stray markdown fences, then pull out the JSON object. Using a
         # regex to locate the outermost {...} is more robust than lstrip tricks
         # (which could mangle content) when a model wraps JSON in prose/fences.
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if not match:
             raise ValueError("no JSON object found in judge response")
-        return json.loads(match.group(0))
+        judgment = json.loads(match.group(0))
+        if not judgment.get("verdict"):
+            raise ValueError("judge response has no verdict")
+        return judgment
     except asyncio.TimeoutError:
         log.warning("judge failed: timeout after %ss", settings.ensemble_timeout_sec)
         return _judge_fallback(valid)
