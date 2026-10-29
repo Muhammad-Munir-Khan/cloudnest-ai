@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.config import settings
@@ -126,12 +127,15 @@ async def extract(
     try:
         result = await run_in_threadpool(extract_attachment, file.filename, data)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        # Provider/OCR problems (missing key or model, upstream error). The
+        # message may contain provider responses, so it is only logged.
+        raise internal_error(
+            "Text extraction is temporarily unavailable", e, status_code=503
+        ) from e
     except Exception as e:
-        log.exception("extraction failed")
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+        raise internal_error("Extraction failed", e) from e
 
     if persist:
         # Save the original file into data/docs and re-index.

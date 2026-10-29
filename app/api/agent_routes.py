@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import storage
+from app.api.errors import error_reference, internal_error, log_error
 from app.agent.ensemble import EnsembleResponse, run_ensemble_async
 from app.agent.graph import run_agent, stream_agent
 from app.core.auth import current_active_user
@@ -31,7 +32,7 @@ def chat(req: AgentRequest, user: User = Depends(current_active_user)):
             user_id=user.id,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent failed: {e}")
+        raise internal_error("Agent failed", e) from e
 
 
 @router.post("/stream")
@@ -50,7 +51,9 @@ def chat_stream(req: AgentRequest, user: User = Depends(current_active_user)):
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
-            err = {"type": "error", "message": str(e)}
+            ref = error_reference()
+            log_error("agent stream failed", e, ref)
+            err = {"type": "error", "message": f"Agent failed. Reference: {ref}"}
             yield f"data: {json.dumps(err)}\n\n"
 
     return StreamingResponse(
@@ -80,9 +83,9 @@ async def ensemble(
     try:
         return await run_ensemble_async(req.message, language=req.language)
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ensemble failed: {e}")
+        raise internal_error("Ensemble failed", e) from e
 
 
 # --- Session management ----------------------------------------------------

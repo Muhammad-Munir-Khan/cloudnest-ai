@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
+from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.config import settings
@@ -50,8 +51,7 @@ async def transcribe(
         # Whisper inference is CPU-bound; keep it off the event loop.
         result = await run_in_threadpool(transcribe_file, tmp_path)
     except Exception as e:
-        log.exception("transcription failed")
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+        raise internal_error("Transcription failed", e) from e
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -71,10 +71,9 @@ def tts(req: TTSRequest, user: User = Depends(current_active_user)):
         audio_bytes = synthesize(req.text, language=req.language)
         media_type = get_media_type()
     except Exception as e:
-        # log.exception prints the FULL traceback to the server log, so we can
-        # see the real cause (Edge API failure, Piper voice download, etc.)
-        log.exception("TTS synthesis failed")
-        raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
+        # The full traceback (Edge API failure, Piper voice download, etc.)
+        # goes to the server log under the reference id.
+        raise internal_error("Speech synthesis failed", e) from e
 
     ext = "mp3" if media_type == "audio/mpeg" else "wav"
     return Response(

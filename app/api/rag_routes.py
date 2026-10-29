@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
 from app.core.logging import get_logger
@@ -49,7 +50,7 @@ def query(req: QueryRequest, user: User = Depends(current_active_user)):
     try:
         return rag_answer(req.question, top_k=req.top_k, language=req.language)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"RAG failed: {e}")
+        raise internal_error("RAG query failed", e) from e
     finally:
         reset_current_user(token)
 
@@ -62,7 +63,7 @@ def list_documents(user: User = Depends(current_active_user)):
     try:
         return list_files_for_user(user.id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"List failed: {e}")
+        raise internal_error("Listing documents failed", e) from e
 
 
 @router.post("/documents", response_model=UploadResponse)
@@ -108,8 +109,7 @@ async def upload_document(
     except Exception as e:
         # Roll back the file if ingestion failed.
         target.unlink(missing_ok=True)
-        log.exception("ingestion failed for %s", safe_name)
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
+        raise internal_error("Ingestion failed", e, f"ingestion failed for {safe_name}") from e
 
     return UploadResponse(
         filename=safe_name,
@@ -133,8 +133,9 @@ def delete_document(
     try:
         chunks_deleted = delete_file_from_user(user.id, safe_name)
     except Exception as e:
-        log.exception("failed to delete chunks for %s", safe_name)
-        raise HTTPException(status_code=500, detail=f"Index cleanup failed: {e}")
+        raise internal_error(
+            "Index cleanup failed", e, f"failed to delete chunks for {safe_name}"
+        ) from e
 
     # Then remove the file.
     target.unlink()
@@ -155,10 +156,10 @@ def reindex_my_docs(user: User = Depends(current_active_user)):
     """
     try:
         result = ingest_for_user(user.id)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No documents to re-index.") from None
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Re-index failed: {e}")
+        raise internal_error("Re-index failed", e) from e
     return IngestResponse(
         chunks_indexed=result["chunks"],
         files_processed=result["files"],
@@ -183,8 +184,8 @@ def run_global_ingestion(user: User = Depends(current_active_user)):
         )
     try:
         result = ingest()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No documents to ingest.") from None
     return IngestResponse(
         chunks_indexed=result["chunks"],
         files_processed=result["files"],

@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.admin_deps import require_corpus_admin, require_super_admin
 from app.core.audit import audit_event
@@ -327,8 +328,9 @@ async def send_password_reset(
     try:
         await user_manager.forgot_password(user)
     except Exception as e:
-        log.exception("admin-triggered reset failed for %s", user.email)
-        raise HTTPException(status_code=500, detail=f"Could not send reset: {e}")
+        raise internal_error(
+            "Could not send reset", e, f"admin-triggered reset failed for {user.email}"
+        ) from e
 
     log.info("admin %s sent password reset to %s", admin.email, user.email)
     audit_event("user.send_reset", actor=admin.email, target=user.email)
@@ -451,11 +453,11 @@ async def delete_user(
         await session.commit()
     except Exception as e:
         await session.rollback()
-        log.exception("Postgres deletion failed for user %s (%s)", user_id, user_email)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not delete user from database: {e}",
-        )
+        raise internal_error(
+            "Could not delete user from database",
+            e,
+            f"Postgres deletion failed for user {user_id} ({user_email})",
+        ) from e
 
     log.info("admin %s hard-deleted user %s (%s) from Postgres", admin.email, user_id, user_email)
     audit_event("user.delete", actor=admin.email, target=user_email)
@@ -503,8 +505,7 @@ async def ingest_structured(
     try:
         inserted = await run_in_threadpool(add_to_global_corpus, items)
     except Exception as e:
-        log.exception("corpus ingest failed")
-        raise HTTPException(status_code=500, detail=f"Ingest failed: {e}")
+        raise internal_error("Ingest failed", e, "corpus ingest failed") from e
 
     total = await run_in_threadpool(global_corpus_count)
     log.info("admin %s ingested %d items into global corpus", admin.email, inserted)
@@ -573,8 +574,7 @@ async def ingest_file(
     try:
         inserted = await run_in_threadpool(_parse_and_insert)
     except Exception as e:
-        log.exception("file ingest failed: %s", safe_name)
-        raise HTTPException(status_code=500, detail=f"Ingest failed: {e}")
+        raise internal_error("Ingest failed", e, f"file ingest failed: {safe_name}") from e
     finally:
         tmp_path.unlink(missing_ok=True)
 
