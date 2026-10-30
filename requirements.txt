@@ -17,7 +17,7 @@ cffi==2.0.0
 charset-normalizer==3.4.7
 weaviate-client==4.21.0
 click==8.3.3
-cryptography==48.0.0
+cryptography==50.0.0
 ctranslate2==4.7.1
 dataclasses-json==0.6.7
 ddgs==9.14.1
@@ -93,7 +93,7 @@ orjson==3.11.8
 ormsgpack==1.12.2
 packaging==25.0
 pathvalidate==3.3.1
-pillow==12.2.0
+pillow==13.0.0
 Pint==0.25.3
 piper-tts==1.4.2
 platformdirs==4.9.6
