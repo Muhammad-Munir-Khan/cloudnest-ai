@@ -78,22 +78,6 @@ def get_langfuse_handler():
         return None
 
 
-def flush_langfuse() -> None:
-    """Flush buffered events. Safe to call even when tracing is disabled.
-
-    Langfuse batches events and sends them asynchronously. In short-lived
-    contexts you may want to force a flush; for a long-running server this is
-    largely handled automatically, but exposing it is harmless.
-    """
-    client = _init_client()
-    if client is None:
-        return
-    try:
-        client.flush()
-    except Exception as e:
-        log.debug("Langfuse flush failed (non-fatal): %s", e)
-
-
 # --- Error tracking (Sentry) --------------------------------------------------
 
 def sentry_dsn_is_valid(dsn: str | None) -> bool:

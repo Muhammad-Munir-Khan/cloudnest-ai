@@ -25,7 +25,7 @@ from langchain_core.documents import Document
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.rag.collections import count_for, search_for
+from app.rag.collections import search_for
 from app.rag.global_collection import global_search
 from app.rag.user_context import get_current_user
 
@@ -95,20 +95,3 @@ def retrieve_merged(
     # Sort by score descending. None-scores sink to the bottom.
     merged.sort(key=lambda p: p[1] if p[1] is not None else float("-inf"), reverse=True)
     return merged
-
-
-def has_documents() -> bool:
-    """Check if the CURRENT user's tenant has any indexed content."""
-    try:
-        user_id = get_current_user()
-        return count_for(user_id) > 0
-    except Exception:
-        return False
-
-
-def has_documents_for(user_id: str) -> bool:
-    """Same check, explicit user_id (used by /health endpoint)."""
-    try:
-        return count_for(user_id) > 0
-    except Exception:
-        return False

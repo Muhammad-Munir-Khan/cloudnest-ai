@@ -18,7 +18,7 @@ Tenant isolation is only as good as the tenant argument being passed on EVERY
 operation. To make it impossible for a call site to forget, this module is the
 single choke point:
   - `tenant_for(user_id)` is the ONLY place the tenant string is computed.
-  - `get_user_vectorstore()` returns the shared MT-enabled store; callers MUST
+  - `get_store()` returns the shared MT-enabled store; callers MUST
     pass `tenant=tenant_for(user_id)` on each add/search/delete.
   - Helper functions here (add/search/delete/count) wrap that so callers never
     touch a raw store without a tenant.
@@ -115,17 +115,6 @@ def get_store() -> WeaviateVectorStore:
         embedding=get_embeddings(),
         use_multi_tenancy=True,
     )
-
-
-def get_user_vectorstore(user_id: str | uuid.UUID) -> WeaviateVectorStore:
-    """Back-compat shim: returns the shared MT store.
-
-    NOTE: unlike the old Chroma version, the returned store is NOT scoped to the
-    user by itself. Callers MUST pass tenant=tenant_for(user_id) on each
-    operation. Prefer the add_/search_/delete_ helpers below which do this for
-    you. Kept so existing imports don't break.
-    """
-    return get_store()
 
 
 # --- Tenant lifecycle ------------------------------------------------------

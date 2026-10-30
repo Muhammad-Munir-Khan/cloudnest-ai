@@ -4,17 +4,6 @@
 
 export type Provider = "GROQ" | "OLLAMA" | string;
 
-export interface HealthResponse {
-  status: string;
-  version: string;
-  provider: string;
-  ollama_chat_model: string;
-  embedding_model: string;
-  voice_enabled: boolean;
-  tts_backend: string;
-  indexed: boolean;
-}
-
 export interface SourceInfo {
   source_file: string;
   page: number | null;

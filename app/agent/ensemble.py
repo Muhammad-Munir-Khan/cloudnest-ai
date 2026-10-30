@@ -332,8 +332,3 @@ async def run_ensemble_async(question: str, language: str = "en") -> EnsembleRes
         judge_model=judge_model,
         total_latency_ms=int((time.time() - t0) * 1000),
     )
-
-
-def run_ensemble(question: str, language: str = "en") -> EnsembleResponse:
-    """Sync wrapper for FastAPI. Spawns its own loop."""
-    return asyncio.run(run_ensemble_async(question, language))

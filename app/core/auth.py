@@ -498,6 +498,3 @@ async def current_active_user(
 # existing admin_deps imports stay working without edits.
 current_active_fresh_user = current_active_user
 
-
-# Backwards-compat alias.
-auth_backend = jwt_backend

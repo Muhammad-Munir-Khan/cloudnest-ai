@@ -21,7 +21,6 @@ import type {
   CorpusSourceInfo,
   CorpusStats,
   EnsembleData,
-  HealthResponse,
   QueryResponse,
   StreamEvent,
   SystemStats,
@@ -49,14 +48,6 @@ async function apiFetch(input: string, init: RequestInit = {}): Promise<Response
     }
   }
   return res;
-}
-
-/* ------------------------------ Health ----------------------------------- */
-
-export async function getHealth(): Promise<HealthResponse> {
-  const res = await apiFetch(`${API_URL}/health`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Health ${res.status}`);
-  return res.json();
 }
 
 /* ------------------------------ Documents (per-user RAG) ---------------- */
@@ -225,14 +216,6 @@ export async function getSessionMessages(
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Get messages ${res.status}`);
-  return res.json();
-}
-
-export async function createSession(sessionId: string): Promise<SessionInfo> {
-  const res = await apiFetch(`${API_URL}/agent/sessions/${sessionId}`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(`Create session ${res.status}`);
   return res.json();
 }
 
