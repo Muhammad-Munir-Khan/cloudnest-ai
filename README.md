@@ -257,8 +257,8 @@ The whole stack runs in Docker. This is the verified deployment path.
 ### 1. Clone + configure
 
 ```bash
-git clone https://github.com/Muhammad-Munir-Khan/Generative-AI-Conversational-Automation-Agent
-cd Generative-AI-Conversational-Automation-Agent
+git clone https://github.com/Muhammad-Munir-Khan/cloudnest-ai
+cd cloudnest-ai
 cp .env.example .env
 ```
 
@@ -666,4 +666,4 @@ What's next, ordered by priority:
 
 ## Credits
 
-Built by [Munir Khan](https://www.linkedin.com/in/munirkhan-ai/) — connect on [LinkedIn](https://www.linkedin.com/in/munirkhan-ai/). If this helped you understand how to build a real GenAI platform end-to-end — or you're considering CloudNest for your own organization's AI workspace — a star on the [repo](https://github.com/Muhammad-Munir-Khan/Generative-AI-Conversational-Automation-Agent) is appreciated.
+Built by [Munir Khan](https://www.linkedin.com/in/munirkhan-ai/) — connect on [LinkedIn](https://www.linkedin.com/in/munirkhan-ai/). If this helped you understand how to build a real GenAI platform end-to-end — or you're considering CloudNest for your own organization's AI workspace — a star on the [repo](https://github.com/Muhammad-Munir-Khan/cloudnest-ai) is appreciated.

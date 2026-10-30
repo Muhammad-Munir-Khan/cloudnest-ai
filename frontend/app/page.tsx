@@ -1264,7 +1264,7 @@ function FinalCTA() {
             <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
           </Link>
           <a
-            href="https://github.com/Muhammad-Munir-Khan/Generative-AI-Conversational-Automation-Agent"
+            href="https://github.com/Muhammad-Munir-Khan/cloudnest-ai"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-7 py-3.5 rounded-md border border-[var(--border-subtle)] hover:border-[var(--accent)]/40 text-[var(--fg-primary)] text-sm font-medium transition"
