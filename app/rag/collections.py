@@ -130,8 +130,8 @@ def ensure_tenant(user_id: str | uuid.UUID) -> None:
     _ensure_collection_exists(client)
     coll = client.collections.get(settings.weaviate_index_name)
     name = tenant_for(user_id)
-    existing = coll.tenants.get()
-    if name not in existing:
+    # Direct lookup: coll.tenants.get() would list every user's tenant.
+    if not coll.tenants.exists(name):
         from weaviate.classes.tenants import Tenant
         coll.tenants.create([Tenant(name=name)])
         log.info("created tenant %s", name)
@@ -156,7 +156,7 @@ def _tenant_exists(user_id: str | uuid.UUID) -> bool:
         if not client.collections.exists(settings.weaviate_index_name):
             return False
         coll = client.collections.get(settings.weaviate_index_name)
-        return tenant_for(user_id) in coll.tenants.get()
+        return coll.tenants.exists(tenant_for(user_id))
     except Exception:
         return False
 
@@ -169,7 +169,7 @@ def delete_user_collection(user_id: str | uuid.UUID) -> None:
             return
         coll = client.collections.get(settings.weaviate_index_name)
         name = tenant_for(user_id)
-        if name in coll.tenants.get():
+        if coll.tenants.exists(name):
             coll.tenants.remove([name])
             log.info("deleted tenant %s", name)
     except Exception as e:

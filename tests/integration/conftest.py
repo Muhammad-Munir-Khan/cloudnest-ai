@@ -62,3 +62,17 @@ def weaviate_env(monkeypatch):
         finally:
             collections.get_store.cache_clear()
             collections.get_weaviate_client.cache_clear()
+
+
+@pytest.fixture
+def global_env(weaviate_env, monkeypatch):
+    """A throwaway shared knowledge-base collection with the fake embedder."""
+    from app.rag import global_collection
+
+    name = f"GlobalTest{uuid.uuid4().hex[:10]}"
+    monkeypatch.setattr(global_collection, "GLOBAL_INDEX", name)
+    monkeypatch.setattr(global_collection, "_embedder", lambda: FakeEmbeddings())
+    try:
+        yield global_collection
+    finally:
+        collections.get_weaviate_client().collections.delete(name)

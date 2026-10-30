@@ -93,17 +93,18 @@ async def alist_sessions(
     maker = get_or_create_bg_engine()
 
     async with maker() as db:
-        msg_counts = (
-            select(
-                ChatMessage.session_id,
-                func.count(ChatMessage.id).label("count"),
-            )
-            .group_by(ChatMessage.session_id)
-            .subquery()
+        # Count per session with a correlated subquery, so only this user's
+        # sessions are counted (an uncorrelated GROUP BY would count every
+        # user's messages on each request) and chat_messages.session_id's
+        # index is used.
+        msg_count = (
+            select(func.count(ChatMessage.id))
+            .where(ChatMessage.session_id == ChatSession.id)
+            .correlate(ChatSession)
+            .scalar_subquery()
         )
         result = await db.execute(
-            select(ChatSession, msg_counts.c.count)
-            .outerjoin(msg_counts, ChatSession.id == msg_counts.c.session_id)
+            select(ChatSession, msg_count)
             .where(ChatSession.user_id == user_uuid)
             .order_by(desc(ChatSession.updated_at))
             .limit(limit)

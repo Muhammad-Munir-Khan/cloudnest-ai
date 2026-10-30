@@ -212,9 +212,9 @@ def list_sources() -> list[dict]:
         collection doesn't exist yet or aggregation fails.
 
     Note: Weaviate v4's group_by aggregation returns one bucket per distinct
-    value of the group key. We additionally take the first object in each
-    bucket to surface its content_type (since chunks from one source typically
-    share the same content_type).
+    value of the group key. The same request also asks for each bucket's most
+    common content_type (chunks from one source typically share it), so the
+    whole listing is a single query however many sources there are.
     """
     try:
         client = get_weaviate_client()
@@ -222,11 +222,14 @@ def list_sources() -> list[dict]:
             return []
         coll = client.collections.get(GLOBAL_INDEX)
 
-        from weaviate.classes.aggregate import GroupByAggregate
+        from weaviate.classes.aggregate import GroupByAggregate, Metrics
 
         agg = coll.aggregate.over_all(
             group_by=GroupByAggregate(prop="source_title"),
             total_count=True,
+            return_metrics=Metrics("content_type").text(
+                top_occurrences_count=True, top_occurrences_value=True, limit=1
+            ),
         )
 
         results: list[dict] = []
@@ -234,8 +237,7 @@ def list_sources() -> list[dict]:
         for group in getattr(agg, "groups", []) or []:
             source_title = group.grouped_by.value if group.grouped_by else "(unknown)"
             count = group.total_count or 0
-            # Best-effort: fetch one object from this source for content_type.
-            content_type = _peek_content_type(coll, source_title)
+            content_type = _group_content_type(group)
             results.append({
                 "source_title": source_title or "(untitled)",
                 "content_type": content_type or "document",
@@ -250,22 +252,14 @@ def list_sources() -> list[dict]:
         return []
 
 
-def _peek_content_type(coll, source_title: str) -> str | None:
-    """Fetch one object from a source to read its content_type."""
-    if not source_title:
-        return None
+def _group_content_type(group) -> str | None:
+    """Most common content_type in one aggregation group, if Weaviate returned it."""
     try:
-        from weaviate.classes.query import Filter
-        res = coll.query.fetch_objects(
-            filters=Filter.by_property("source_title").equal(source_title),
-            limit=1,
-            return_properties=["content_type"],
-        )
-        for obj in res.objects:
-            return (obj.properties or {}).get("content_type")
+        metric = (group.properties or {}).get("content_type")
+        top = getattr(metric, "top_occurrences", None) or []
+        return top[0].value if top else None
     except Exception:
-        pass
-    return None
+        return None
 
 
 def delete_by_source(source_title: str) -> int:
