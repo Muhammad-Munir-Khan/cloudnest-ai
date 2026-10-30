@@ -112,7 +112,8 @@ async def upload_document(
     return UploadResponse(
         filename=safe_name,
         chunks_indexed=result["chunks"],
-        message=f"Uploaded and indexed {safe_name} ({result['chunks']} chunks).",
+        message=f"Uploaded and indexed {safe_name} ({result['chunks']} chunks)."
+        + (f" Replaced {result['replaced']} existing chunks." if result.get("replaced") else ""),
     )
 
 

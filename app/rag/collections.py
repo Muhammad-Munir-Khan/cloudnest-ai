@@ -269,6 +269,24 @@ def count_for(user_id: str | uuid.UUID) -> int:
         return 0
 
 
+def _source_file_ids(tenant_coll, filename: str) -> list:
+    """UUIDs of the tenant's chunks whose source_file is exactly `filename`.
+
+    Weaviate indexes source_file by words (and drops stop-words such as "a"), so
+    the equal filter alone also matches "b.txt" for "a.txt" and
+    "report-final.pdf" for "report.pdf". Keep only exact matches.
+    """
+    from weaviate.classes.query import Filter
+
+    res = tenant_coll.query.fetch_objects(
+        filters=Filter.by_property("source_file").equal(filename),
+        limit=10000,
+        return_properties=["source_file"],
+    )
+    return [o.uuid for o in res.objects
+            if (o.properties or {}).get("source_file") == filename]
+
+
 def delete_by_source_file(user_id: str | uuid.UUID, filename: str) -> int:
     """Delete all chunks whose source_file == filename, within the tenant."""
     from weaviate.classes.query import Filter
@@ -278,35 +296,22 @@ def delete_by_source_file(user_id: str | uuid.UUID, filename: str) -> int:
     client = get_weaviate_client()
     coll = client.collections.get(settings.weaviate_index_name)
     tenant_coll = coll.with_tenant(tenant_for(user_id))
-    # Count matches first (for the return value), then delete.
-    res = tenant_coll.query.fetch_objects(
-        filters=Filter.by_property("source_file").equal(filename),
-        limit=10000,
-    )
-    n = len(res.objects)
-    if n:
-        tenant_coll.data.delete_many(
-            where=Filter.by_property("source_file").equal(filename)
-        )
-        log.info("deleted %d chunks for %s (user=%s)", n, filename, user_id)
-    return n
+    ids = _source_file_ids(tenant_coll, filename)
+    if ids:
+        tenant_coll.data.delete_many(where=Filter.by_id().contains_any(ids))
+        log.info("deleted %d chunks for %s (user=%s)", len(ids), filename, user_id)
+    return len(ids)
 
 
 def count_by_source_file(user_id: str | uuid.UUID, filename: str) -> int:
     """Count chunks for a specific source file within the tenant."""
-    from weaviate.classes.query import Filter
-
     try:
         if not _tenant_exists(user_id):
             return 0
         client = get_weaviate_client()
         coll = client.collections.get(settings.weaviate_index_name)
         tenant_coll = coll.with_tenant(tenant_for(user_id))
-        res = tenant_coll.aggregate.over_all(
-            total_count=True,
-            filters=Filter.by_property("source_file").equal(filename),
-        )
-        return res.total_count
+        return len(_source_file_ids(tenant_coll, filename))
     except Exception as e:
         log.debug("count_by_source_file failed: %s", e)
         return 0

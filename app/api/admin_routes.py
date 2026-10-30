@@ -557,7 +557,9 @@ async def ingest_file(
 
     tmp_path = Path(tempfile.gettempdir()) / safe_name
     tmp_path.write_bytes(data)
-    def _parse_and_insert() -> int:
+    title = source_title or safe_name
+
+    def _parse_and_insert() -> tuple[int, int]:
         # Parsing, chunking and embedding are blocking; run in a thread.
         raw = _load_one(tmp_path)
         chunks = chunk_documents(raw)
@@ -565,28 +567,34 @@ async def ingest_file(
             {
                 "text": c.page_content,
                 "content_type": content_type,
-                "source_title": source_title or safe_name,
+                "source_title": title,
                 "author": author,
                 "page": str(c.metadata.get("page", "")),
             }
             for c in chunks
         ]
-        return add_to_global_corpus(items)
+        # Re-uploading a source replaces it instead of duplicating its chunks;
+        # the old ones go only after the new file parsed and chunked.
+        replaced = delete_by_source(title)
+        return add_to_global_corpus(items), replaced
 
     try:
-        inserted = await run_in_threadpool(_parse_and_insert)
+        inserted, replaced = await run_in_threadpool(_parse_and_insert)
     except Exception as e:
         raise internal_error("Ingest failed", e, f"file ingest failed: {safe_name}") from e
     finally:
         tmp_path.unlink(missing_ok=True)
 
     total = await run_in_threadpool(global_corpus_count)
-    log.info("admin %s ingested %s (%d chunks)", admin.email, safe_name, inserted)
-    audit_event("kb.upload", actor=admin.email, target=safe_name, chunks=inserted)
+    log.info("admin %s ingested %s (%d chunks, %d replaced)",
+             admin.email, safe_name, inserted, replaced)
+    audit_event("kb.upload", actor=admin.email, target=safe_name, chunks=inserted,
+                replaced=replaced)
+    note = f" Replaced {replaced} existing chunks of '{title}'." if replaced else ""
     return CorpusIngestResponse(
         inserted=inserted,
         total_in_corpus=total,
-        message=f"Ingested {inserted} chunks from {safe_name}. Corpus now holds {total}.",
+        message=f"Ingested {inserted} chunks from {safe_name}.{note} Corpus now holds {total}.",
     )
 
 

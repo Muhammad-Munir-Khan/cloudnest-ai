@@ -283,9 +283,19 @@ def delete_by_source(source_title: str) -> int:
         coll = client.collections.get(GLOBAL_INDEX)
 
         from weaviate.classes.query import Filter
-        result = coll.data.delete_many(
-            where=Filter.by_property("source_title").equal(source_title),
+
+        # source_title is word-tokenized by Weaviate, so the equal filter alone
+        # also matches "Annual Report" for "Report". Keep exact matches only.
+        found = coll.query.fetch_objects(
+            filters=Filter.by_property("source_title").equal(source_title),
+            limit=10000,
+            return_properties=["source_title"],
         )
+        ids = [o.uuid for o in found.objects
+               if (o.properties or {}).get("source_title") == source_title]
+        if not ids:
+            return 0
+        result = coll.data.delete_many(where=Filter.by_id().contains_any(ids))
         # delete_many returns DeleteManyReturn with .matches / .successful
         deleted = int(getattr(result, "successful", 0) or getattr(result, "matches", 0) or 0)
         log.info("deleted %d objects from corpus where source_title=%r", deleted, source_title)

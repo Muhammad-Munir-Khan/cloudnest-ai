@@ -7,16 +7,11 @@ Isolation comes from the `tenant=` argument, not from the embeddings, so a
 fake embedder is used (no 2 GB model download). Each run uses its own throwaway
 collection so a developer's real index is never touched.
 """
-import hashlib
-import socket
 import uuid
-from urllib.parse import urlparse
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.embeddings import Embeddings
 
-from app.core.config import settings
 from app.rag import collections
 from app.rag.collections import (
     add_documents_for,
@@ -28,53 +23,6 @@ from app.rag.collections import (
     search_for,
     tenant_for,
 )
-
-DIM = 64
-
-
-class FakeEmbeddings(Embeddings):
-    """Deterministic bag-of-words vectors: shared words give similar vectors."""
-
-    def _vec(self, text: str) -> list[float]:
-        v = [0.0] * DIM
-        for word in text.lower().split():
-            h = int(hashlib.sha256(word.encode()).hexdigest(), 16)
-            v[h % DIM] += 1.0
-        return v or [1.0] + [0.0] * (DIM - 1)
-
-    def embed_documents(self, texts):
-        return [self._vec(t) for t in texts]
-
-    def embed_query(self, text):
-        return self._vec(text)
-
-
-def _weaviate_reachable() -> bool:
-    parsed = urlparse(settings.weaviate_url)
-    try:
-        with socket.create_connection((parsed.hostname or "localhost", parsed.port or 8080), 2):
-            return True
-    except OSError:
-        return False
-
-
-@pytest.fixture
-def weaviate_env(monkeypatch):
-    if not _weaviate_reachable():
-        pytest.skip(f"Weaviate not reachable at {settings.weaviate_url}")
-    name = f"IsolationTest{uuid.uuid4().hex[:10]}"
-    monkeypatch.setattr(settings, "weaviate_index_name", name)
-    monkeypatch.setattr(collections, "get_embeddings", lambda: FakeEmbeddings())
-    collections.get_store.cache_clear()
-    collections.get_weaviate_client.cache_clear()
-    try:
-        yield name
-    finally:
-        try:
-            collections.get_weaviate_client().collections.delete(name)
-        finally:
-            collections.get_store.cache_clear()
-            collections.get_weaviate_client.cache_clear()
 
 
 @pytest.fixture

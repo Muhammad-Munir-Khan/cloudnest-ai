@@ -101,8 +101,10 @@ def ingest_single_file_for_user(
 ) -> dict:
     """Index one file (typically just-uploaded) into the user's tenant.
 
-    Does NOT wipe the existing tenant - chunks are added on top of any
-    previously ingested ones. Returns chunk count for this file only.
+    Does NOT wipe the existing tenant, but replaces any chunks already indexed
+    for a file with the same name, so re-uploading does not create duplicates.
+    The old chunks are removed only after the new file parsed and chunked
+    successfully. Returns chunk counts for this file only.
     """
     if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
@@ -114,10 +116,14 @@ def ingest_single_file_for_user(
         d.metadata.setdefault("page", d.metadata.get("page", 0))
     chunks = chunk_documents(raw)
 
+    replaced = delete_by_source_file(user_id, file_path.name)
+    if replaced:
+        log.info("replacing %d existing chunks of %s", replaced, file_path.name)
+
     # add_documents_for ensures the tenant exists, then adds (no wipe).
     add_documents_for(user_id, chunks)
     log.info("added %d chunks for %s", len(chunks), file_path.name)
-    return {"file": file_path.name, "chunks": len(chunks)}
+    return {"file": file_path.name, "chunks": len(chunks), "replaced": replaced}
 
 
 def delete_file_from_user(user_id: str | uuid.UUID, filename: str) -> int:
