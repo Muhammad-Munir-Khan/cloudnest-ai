@@ -6,6 +6,14 @@
 
 > Your own AI workspace. Your data. Your rules.
 
+<p align="center">
+  <a href="https://youtu.be/rSgipBX2gQA" title="Watch the CloudNest.ai live demo on YouTube">
+    <img src="assets/demo-thumbnail.png" alt="Watch the CloudNest.ai live demo (6 min)" width="820">
+  </a>
+  <br>
+  <sub><b><a href="https://youtu.be/rSgipBX2gQA">▶ Watch the 6-minute live demo</a></b> · document Q&amp;A with citations · 10-tool agent · voice in/out · vision · multi-LLM consensus · admin panel</sub>
+</p>
+
 A self-hostable, multi-tenant conversational AI platform built end-to-end. Combines per-user retrieval-augmented generation, a shared admin-curated knowledge base, a 10-tool agent loop, multi-LLM consensus mode, voice in/out, vision, true multilingual retrieval across 100+ languages, strict per-turn response-language control, a real admin panel, and a streaming Next.js frontend. Switches between Groq, OpenRouter, and Ollama through one config line. Deploys with one Docker command.
 
 > **Author:** [Munir Khan](https://www.linkedin.com/in/munirkhan-ai/) · [LinkedIn](https://www.linkedin.com/in/munirkhan-ai/)
