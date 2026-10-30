@@ -4,6 +4,8 @@
 
 A self-hostable, multi-tenant conversational AI platform built end-to-end. Combines per-user retrieval-augmented generation, a shared admin-curated knowledge base, a 10-tool agent loop, multi-LLM consensus mode, voice in/out, vision, true multilingual retrieval across 100+ languages, strict per-turn response-language control, a real admin panel, and a streaming Next.js frontend. Switches between Groq, OpenRouter, and Ollama through one config line. Deploys with one Docker command.
 
+> **Author:** [Munir Khan](https://www.linkedin.com/in/munirkhan-ai/) · [LinkedIn](https://www.linkedin.com/in/munirkhan-ai/)
+>
 > **Stack:** FastAPI · LangGraph · LangChain · PostgreSQL · Weaviate · BGE-M3 embeddings · faster-whisper · Edge TTS · Next.js 15 · Tailwind · fastapi-users · Langfuse · Docker
 >
 > **Three swappable LLM providers.** Groq for raw speed, OpenRouter for access to ~100 commercial models (Claude, GPT-4, Gemini), or Ollama for fully local inference. One `.env` line picks the active backend — and the same line also routes the vision and ensemble paths. See the [provider support matrix](#provider-support) for tested behavior on each.
@@ -19,6 +21,7 @@ A self-hostable, multi-tenant conversational AI platform built end-to-end. Combi
 - **Multilingual retrieval (100+ languages).** Powered by `BAAI/bge-m3`, a state-of-the-art multilingual embedding model. Upload a manual in English, query it in Urdu — cross-lingual retrieval works because the embeddings share semantic space across languages.
 - **Strict response-language control (37 languages).** A language selector sets the response language independently of retrieval. Switch from English to Japanese mid-conversation and every subsequent answer — chat, RAG, and the ensemble verdict — responds in the selected language, overriding the language of earlier turns. This is distinct from the cross-lingual *retrieval* above: one controls what language the model *answers in*, the other lets it *find* relevant chunks regardless of language.
 - **Multi-LLM consensus mode.** Toggle on to fan a single query out to **3 different models in parallel**. A 4th model judges the responses, ranks them with reasoning, and synthesizes a final verdict. Works on either Groq or OpenRouter — picks the active provider automatically, and honors the selected response language in both candidates and verdict.
+- **Chats that survive a reload.** Agent, RAG and ensemble turns are all saved to the session, together with their sources, tool calls and latency, so citations are still there when you reopen a conversation. Re-uploading a document replaces its old chunks instead of duplicating them.
 - **Streaming with live agent trace.** SSE-based token streaming. Tool calls appear in a vertical timeline as they execute (`knowledge_base_search` → `calculator` → `currency_converter`), each transitioning from `running` to `done` in real time.
 - **Production-grade authentication & isolation.** JWT + httpOnly cookies (XSS-resistant). Bearer token also supported for CLI/API. OAuth via Google and GitHub. Postgres-backed user accounts. Per-user sessions, messages, documents, and Weaviate tenants. Two users on the same backend never see each other's data — enforced at the database, vector store, API, and agent-context layers.
 - **Global force-logout.** When an admin force-logs out a user, every active session dies on the next request — not just admin pages. Implemented via JWT iat-cutoff checks on every authenticated endpoint.
@@ -183,7 +186,7 @@ A real user-management surface, not a settings page. Surfaced at `/admin` for us
 ```
 cloudnest/
 ├── app/                         # FastAPI backend
-│   ├── core/                    # config · secrets · logging · LLM provider · auth · audit · email · DB · roles · admin_deps · language · security_headers · rate_limit
+│   ├── core/                    # config · secrets · logging · LLM provider · auth · audit · email · DB · roles · admin_deps · language · security_headers · rate_limit · body_limit · oauth_email · observability
 │   ├── rag/
 │   │   ├── ingestion.py         # per-user document indexing
 │   │   ├── retrieval.py         # contextvar-scoped retrieval + retrieve_merged (personal + KB)
@@ -194,15 +197,17 @@ cloudnest/
 │   │   ├── extraction.py        # PDF/image text extraction + provider-aware vision OCR
 │   │   └── user_context.py      # contextvar holding the active user UUID
 │   ├── agent/
-│   │   ├── graph.py             # LangGraph ReAct loop (run + stream + dedup tool node + KB source extraction)
+│   │   ├── graph.py             # LangGraph ReAct loop (run + stream + dedup tool node + citations from tool results)
+│   │   ├── guard.py             # prompt-injection limits: web_search egress check, attachment delimiters
 │   │   ├── ensemble.py          # Multi-LLM parallel execution + judge
 │   │   ├── memory.py            # Session-scoped conversation buffer
 │   │   ├── storage.py           # Postgres-backed sessions & messages
+│   │   ├── turns.py             # saves RAG and ensemble turns with their metadata
 │   │   └── titler.py            # LLM-based automatic chat naming
 │   ├── tools/                   # 10 tool implementations
 │   ├── voice/                   # STT (Whisper) + TTS (Edge / Piper)
-│   ├── api/                     # FastAPI route modules (auth, rag, agent, voice, attachments, admin)
-│   ├── models/                  # SQLAlchemy models (user, session, message, oauth_account)
+│   ├── api/                     # FastAPI route modules (rag, agent, voice, attachments, admin) + shared error and upload helpers
+│   ├── models/                  # SQLAlchemy models (user, oauth_account, chat session, chat message)
 │   └── main.py                  # FastAPI entry point with lifespan pre-warm + exception handlers
 │
 ├── frontend/                    # Next.js 15 app
@@ -228,10 +233,11 @@ cloudnest/
 ├── tests/                       # pytest suite; tests/integration needs a running Weaviate
 ├── evals/                       # Ragas RAG evaluation harness
 ├── .github/                     # Dependabot config + CI (tests, lint, builds) and security-scan workflows
+├── .pip-audit-ignore            # accepted security-scan exceptions, each with a reason (also .trivyignore)
 │
-├── alembic/                     # Database migrations (role, jwt_invalidated_at, created_at, ...)
+├── alembic/                     # Database migrations (role, jwt_invalidated_at, created_at, chat message meta, ...)
 ├── data/                        # used by local-dev path only; ignored in Docker
-├── requirements.txt
+├── requirements.txt             # exact pins (CPU torch is installed first, see Dockerfile-backend)
 ├── requirements-dev.txt         # pytest + ruff (includes requirements.txt)
 ├── .env.example
 └── README.md
@@ -333,7 +339,8 @@ docker compose -f docker/docker-compose.yml up -d postgres weaviate redis
 python -m venv .venv
 .\.venv\Scripts\activate          # Windows
 # source .venv/bin/activate       # macOS / Linux
-pip install -r requirements.txt
+pip install --index-url https://download.pytorch.org/whl/cpu torch==2.13.0   # CPU wheel first, as the Dockerfile does
+pip install -r requirements-dev.txt   # runtime deps + pytest + ruff
 alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
@@ -407,7 +414,7 @@ See `.env.example` for the full reference with comments.
 
 ## API reference
 
-The full API surface — 49 endpoints across 8 functional groups. Interactive docs with request/response schemas live at **http://localhost:8000/docs** (Swagger UI) and **http://localhost:8000/redoc**.
+The full API surface, grouped by area. Interactive docs with request/response schemas live at **http://localhost:8000/docs** (Swagger UI) and **http://localhost:8000/redoc**.
 
 Most authenticated endpoints enforce the JWT-freshness check, so a force-logout immediately invalidates active sessions. Browser clients authenticate via the httpOnly cookie set by `/auth/cookie/login`; CLI tools and scripts use `Authorization: Bearer <token>` headers from `/auth/jwt/login`. Same JWT under the hood, two transport mechanisms.
 
@@ -659,4 +666,4 @@ What's next, ordered by priority:
 
 ## Credits
 
-Built by [Munir Khan](https://www.linkedin.com/in/munir-k-0106b1256/). If this helped you understand how to build a real GenAI platform end-to-end — or you're considering CloudNest for your own organization's AI workspace — a star on the [repo](https://github.com/Muhammad-Munir-Khan/Generative-AI-Conversational-Automation-Agent) is appreciated.
+Built by [Munir Khan](https://www.linkedin.com/in/munirkhan-ai/) — connect on [LinkedIn](https://www.linkedin.com/in/munirkhan-ai/). If this helped you understand how to build a real GenAI platform end-to-end — or you're considering CloudNest for your own organization's AI workspace — a star on the [repo](https://github.com/Muhammad-Munir-Khan/Generative-AI-Conversational-Automation-Agent) is appreciated.

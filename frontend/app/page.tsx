@@ -1290,7 +1290,7 @@ function SiteFooter() {
           <span className="font-mono">
             Built by{" "}
             <a
-              href="https://www.linkedin.com/in/munir-k-0106b1256/"
+              href="https://www.linkedin.com/in/munirkhan-ai/"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--fg-secondary)] hover:text-[var(--accent)] transition font-semibold"
