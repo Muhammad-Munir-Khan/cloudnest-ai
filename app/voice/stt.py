@@ -29,7 +29,9 @@ def transcribe_file(path: Path) -> dict:
     model = _get_model()
     segments, info = model.transcribe(
         str(path),
-        language=settings.whisper_language,
+        # An empty WHISPER_LANGUAGE means auto-detect, like leaving it unset;
+        # faster-whisper rejects "" as a language code.
+        language=settings.whisper_language or None,
         beam_size=1,
         vad_filter=True,
     )
