@@ -57,7 +57,7 @@ jobs:
             requirements-dev.txt
       # CPU-only torch first, as in docker/Dockerfile-backend: the default
       # PyPI wheel pulls gigabytes of CUDA libraries the tests never use.
-      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch==2.11.0
+      - run: pip install --index-url https://download.pytorch.org/whl/cpu torch==2.13.0
       - run: pip install -r requirements-dev.txt
       # Settings has ~58 required fields; the template must stay complete.
       - run: cp .env.example .env

@@ -13,11 +13,3 @@ GHSA-pxh4-856f-4h89
 CVE-2026-24486
 CVE-2026-42561
 CVE-2026-53539
-
-# sentence-transformers: fix needs sentence-transformers 5 (major); tracked as DEP-03.
-CVE-2026-68770
-
-# transformers: fix needs transformers 5 (major); tracked as DEP-03.
-CVE-2026-4372
-CVE-2026-5241
-CVE-2026-9856

@@ -28,21 +28,3 @@ PYSEC-2026-3037
 PYSEC-2026-3038
 PYSEC-2026-3039
 PYSEC-2026-3040
-
-# sentence-transformers: fix needs sentence-transformers 5 (major); tracked as DEP-03.
-PYSEC-2026-4164
-
-# setuptools: transitive build-time dependency capped by torch; not used at runtime; tracked as DEP-03.
-GHSA-xmj3-9gf7-h52w
-PYSEC-2026-3447
-
-# torch: fix needs torch 2.13; pinned in docker/Dockerfile-backend and ci.yml; tracked as DEP-03.
-PYSEC-2025-194
-
-# transformers: fix needs transformers 5 (major) for the embedding stack; needs a real embedding check (tracked as DEP-03).
-PYSEC-2025-217
-PYSEC-2026-2288
-PYSEC-2026-2289
-PYSEC-2026-2290
-PYSEC-2026-3929
-PYSEC-2026-4174
