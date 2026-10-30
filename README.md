@@ -453,7 +453,7 @@ Per-user document indexing and retrieval. Every endpoint operates on the authent
 
 | Method | Path                            | Purpose                                                  |
 |--------|---------------------------------|----------------------------------------------------------|
-| POST   | `/rag/query`                    | Single-shot RAG Q&A with citations. Merges retrieval from personal docs + shared knowledge base. Returns `{answer, sources[], latency_ms}` |
+| POST   | `/rag/query`                    | Single-shot RAG Q&A with citations. Merges retrieval from personal docs + shared knowledge base. Returns `{answer, sources[], latency_ms}`. Optional `session_id` saves the turn to that chat |
 | GET    | `/rag/documents`                | List the authenticated user's indexed documents          |
 | POST   | `/rag/documents`                | Upload + index a document (PDF, TXT, MD, DOCX; 10MB cap) into the user's tenant. Re-uploading a file name replaces its chunks; the response says how many were replaced |
 | DELETE | `/rag/documents/{filename}`     | Remove a document from the user's tenant                 |
@@ -472,9 +472,9 @@ Multi-turn conversational agent with 10 tools, streaming, session persistence, a
 |--------|-----------------------------------------------|----------------------------------------------------------|
 | POST   | `/agent/chat`                                 | Multi-turn agent with tools + memory (non-streaming). Returns the final synthesized answer plus source metadata |
 | POST   | `/agent/stream`                               | Streaming agent via Server-Sent Events. Emits live tool-call events (`running` → `done`), token deltas, and source attachments as they happen |
-| POST   | `/agent/ensemble`                             | Multi-LLM consensus mode. Fans the query out to N models in parallel, judge ranks + synthesizes the final answer |
+| POST   | `/agent/ensemble`                             | Multi-LLM consensus mode. Fans the query out to N models in parallel, judge ranks + synthesizes the final answer. Optional `session_id` saves the question and the verdict to that chat |
 | GET    | `/agent/sessions`                             | List the authenticated user's chat sessions (auto-titled, sorted by recency) |
-| GET    | `/agent/sessions/{session_id}/messages`       | Full message history for one session                     |
+| GET    | `/agent/sessions/{session_id}/messages`       | Full message history for one session, with each assistant message's saved `metadata` (mode, sources, tool calls, latency) |
 | POST   | `/agent/sessions/{session_id}`                | Create a session with a specific UUID (idempotent — used by frontend to anchor a session before the first user message) |
 | PATCH  | `/agent/sessions/{session_id}`                | Rename a session (override the auto-generated title)     |
 | DELETE | `/agent/sessions/{session_id}`                | Delete a session and all its messages                    |

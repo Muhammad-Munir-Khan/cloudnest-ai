@@ -48,7 +48,7 @@ The embedding model (`BAAI/bge-m3`, multilingual, 1024 dimensions) is pre-warmed
 - **The agent gets retrieval as tools, not a prompt prefix,** so the model decides per turn whether to search documents, the knowledge base, the web, or nothing. Two separately scoped retrieval tools avoid the recursion loops an overlapping pair caused.
 - **Shared multi-tenant collection** instead of a collection per user: cleaner operations, with isolation depending on always passing the tenant; an integration test against a real Weaviate guards this.
 - **Rate limiting fails open** when Redis is unreachable (configurable), so a cache outage does not take the app down.
-- **RAG and ensemble turns are not saved to chat history yet** (agent turns are); reloading a session shows only the saved turns.
+- **All chat modes are saved to the history** with their sources and tool calls (`chat_messages.meta`); ensemble turns keep only the question and final verdict, not the per-model candidates, so a reloaded ensemble turn shows as plain text.
 - **Prompt injection is not defended against:** a malicious document or web page could try to steer the agent.
 - **CPU-only Ollama is slow;** Groq is the recommended primary path.
 
