@@ -293,7 +293,7 @@ Containers brought up:
 - `cloudnest-weaviate` — vector store, multi-tenant per-user
 - `cloudnest-api` — FastAPI backend, runs Alembic migrations on entrypoint
 - `cloudnest-frontend` — Next.js 15 frontend
-- `cloudnest-ollama` + `cloudnest-ollama-pull` — local LLM provider (used if `LLM_PROVIDER=ollama`)
+- `cloudnest-ollama` + `cloudnest-ollama-pull` — local LLM provider, started only with `--profile ollama` (needed only if `LLM_PROVIDER=ollama`)
 
 ### 3. Open the app
 

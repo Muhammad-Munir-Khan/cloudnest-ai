@@ -43,6 +43,9 @@ services:
     # Pinned so `docker compose pull` cannot silently change the runtime.
     image: ollama/ollama:0.40.13
     container_name: cloudnest-ollama
+    # Optional: only started with `--profile ollama` (LLM_PROVIDER=ollama).
+    # Groq/OpenRouter setups do not need it, and `api` does not wait for it.
+    profiles: ["ollama"]
     ports:
       - "11434:11434"
     volumes:
@@ -59,6 +62,7 @@ services:
   ollama-pull:
     image: ollama/ollama:0.40.13
     container_name: cloudnest-ollama-pull
+    profiles: ["ollama"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -109,8 +113,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
       weaviate:
         condition: service_healthy
