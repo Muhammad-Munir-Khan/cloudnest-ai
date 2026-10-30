@@ -1,6 +1,7 @@
 "use client";
 
-import { Cloud, ShieldCheck } from "lucide-react";
+import LogoMark from "@/components/LogoMark";
+import { ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
@@ -16,14 +17,14 @@ const API_BASE =
 
 function Wordmark({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const sizes = {
-    sm: { text: "text-base", tld: "text-[0.7rem]", icon: "w-4 h-4" },
-    md: { text: "text-lg", tld: "text-xs", icon: "w-[18px] h-[18px]" },
+    sm: { text: "text-base", tld: "text-[0.7rem]", icon: "w-5 h-5" },
+    md: { text: "text-lg", tld: "text-xs", icon: "w-6 h-6" },
     lg: { text: "text-xl", tld: "text-sm", icon: "w-5 h-5" },
   };
   const s = sizes[size];
   return (
     <div className="inline-flex items-baseline gap-1.5">
-      <Cloud className={`${s.icon} text-[var(--accent)] self-center`} strokeWidth={2.25} />
+      <LogoMark className={`${s.icon} self-center shrink-0`} />
       <span
         className={`${s.text} font-bold bg-clip-text text-transparent tracking-tight`}
         style={{ backgroundImage: "linear-gradient(135deg, var(--accent-bright), var(--accent))" }}

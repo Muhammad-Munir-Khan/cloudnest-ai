@@ -1,9 +1,9 @@
 "use client";
 
+import LogoMark from "@/components/LogoMark";
 import {
   Bot,
   ChevronRight,
-  Cloud,
   FileText,
   Languages,
   Palette,
@@ -70,10 +70,7 @@ export function Sidebar({
         aria-label="CloudNest home"
         className="inline-flex items-baseline gap-1.5 mb-6 group w-fit"
       >
-        <Cloud
-          className="w-[18px] h-[18px] text-[var(--accent)] self-center transition-transform group-hover:scale-110"
-          strokeWidth={2.25}
-        />
+        <LogoMark className="w-6 h-6 self-center shrink-0 transition-transform group-hover:scale-110" />
         <span
           className="text-lg font-bold bg-clip-text text-transparent tracking-tight"
           style={{

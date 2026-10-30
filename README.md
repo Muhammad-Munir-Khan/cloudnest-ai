@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="CloudNest.ai" width="460">
+</p>
+
 # CloudNest.ai
 
 > Your own AI workspace. Your data. Your rules.

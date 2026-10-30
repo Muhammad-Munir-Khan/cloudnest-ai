@@ -1,6 +1,7 @@
 "use client";
 
-import { Cloud, MailCheck } from "lucide-react";
+import LogoMark from "@/components/LogoMark";
+import { MailCheck } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
@@ -17,7 +18,7 @@ const API_BASE =
 function Wordmark() {
   return (
     <div className="inline-flex items-baseline gap-1.5">
-      <Cloud className="w-5 h-5 text-[var(--accent)] self-center" strokeWidth={2.25} />
+      <LogoMark className="w-6 h-6 self-center shrink-0" />
       <span
         className="text-xl font-bold bg-clip-text text-transparent tracking-tight"
         style={{ backgroundImage: "linear-gradient(135deg, var(--accent-bright), var(--accent))" }}
