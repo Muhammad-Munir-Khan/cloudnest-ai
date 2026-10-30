@@ -31,6 +31,11 @@ class SourceInfo(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=MAX_MESSAGE_CHARS)
     top_k: int | None = Field(None, ge=1, le=MAX_TOP_K)
+    session_id: str | None = Field(
+        None, max_length=100,
+        description="If set, the question and answer are saved to this chat "
+                    "session so they show up when it is reloaded.",
+    )
     language: str = Field(
         "en",
         max_length=MAX_LANGUAGE_CHARS,

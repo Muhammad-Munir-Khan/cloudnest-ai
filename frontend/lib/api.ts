@@ -109,11 +109,13 @@ export async function reindex(): Promise<{ message: string; chunks_indexed: numb
 export async function ragQuery(
   question: string,
   language = "en",
+  sessionId?: string,
 ): Promise<QueryResponse> {
   const res = await apiFetch(`${API_URL}/rag/query`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, language }),
+    // With a session id the backend saves the turn to that chat.
+    body: JSON.stringify({ question, language, session_id: sessionId }),
   });
   if (!res.ok) throw new Error(`Query ${res.status}: ${await res.text()}`);
   return res.json();
@@ -247,11 +249,13 @@ export type EnsembleApiResponse = EnsembleData;
 export async function ensembleChat(
   message: string,
   language = "en",
+  sessionId?: string,
 ): Promise<EnsembleApiResponse> {
   const res = await apiFetch(`${API_URL}/agent/ensemble`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, language }),
+    // With a session id the backend saves the question and the verdict.
+    body: JSON.stringify({ message, language, session_id: sessionId }),
   });
   if (!res.ok) throw new Error(`Ensemble ${res.status}: ${await res.text()}`);
   return res.json();

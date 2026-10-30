@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from app.agent.turns import save_turn, turn_meta
 from app.api.errors import internal_error
 from app.api.uploads import read_upload_limited
 from app.core.auth import current_active_user
@@ -46,7 +47,10 @@ class UploadResponse(BaseModel):
 def query(req: QueryRequest, user: User = Depends(current_active_user)):
     token = set_current_user(user.id)
     try:
-        return rag_answer(req.question, top_k=req.top_k, language=req.language)
+        result = rag_answer(req.question, top_k=req.top_k, language=req.language)
+        save_turn(req.session_id, user.id, req.question, result.answer,
+                  turn_meta("rag", result.sources, latency_ms=result.latency_ms))
+        return result
     except Exception as e:
         raise internal_error("RAG query failed", e) from e
     finally:

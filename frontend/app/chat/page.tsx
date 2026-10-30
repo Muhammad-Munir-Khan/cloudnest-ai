@@ -15,10 +15,13 @@ import {
   streamAgent,
   transcribe,
   type SessionInfo,
+  type StoredMessage,
 } from "@/lib/api";
 import type {
   ChatMessage,
   Mode,
+  SourceInfo,
+  ToolCall,
   TraceEntry,
 } from "@/lib/types";
 import { useTheme } from "@/lib/theme";
@@ -31,6 +34,29 @@ import { Sidebar } from "@/components/Sidebar";
 import { EmptyState } from "@/components/EmptyState";
 import { Composer, type PendingAttachment } from "@/components/Composer";
 import { ChatMessageView } from "@/components/ChatMessage";
+
+/** Turn a saved message back into a chat bubble, with the sources and tool
+ *  calls the backend stored with it (older messages have none). */
+function storedToChatMessage(m: StoredMessage): ChatMessage {
+  const meta = (m.metadata ?? {}) as {
+    sources?: SourceInfo[];
+    tool_calls?: ToolCall[];
+    latency_ms?: number;
+  };
+  const isUser = m.role === "user";
+  return {
+    id: `${m.id}`,
+    role: isUser ? "user" : "assistant",
+    content: m.content,
+    ...(isUser
+      ? {}
+      : {
+          sources: meta.sources?.length ? meta.sources : undefined,
+          toolCalls: meta.tool_calls?.length ? meta.tool_calls : undefined,
+          latencyMs: meta.latency_ms,
+        }),
+  };
+}
 
 export default function Home() {
   const router = useRouter();
@@ -109,11 +135,7 @@ export default function Home() {
     setBusy(true);
     try {
       const stored = await getSessionMessages(id);
-      const replayed: ChatMessage[] = stored.map((m) => ({
-        id: `${m.id}`,
-        role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
-      }));
+      const replayed: ChatMessage[] = stored.map(storedToChatMessage);
       setMessages(replayed);
       setSessionId(id);
       setPendingAttachment(null);
@@ -191,6 +213,16 @@ export default function Home() {
 
   /* ------------------------------ Submit ---------------------------------- */
 
+  // Refresh the sessions list after a turn. The first turn of a chat is
+  // auto-titled in the background, so look again shortly after.
+  const refreshAfterTurn = async (firstTurn: boolean) => {
+    await refreshSessions();
+    if (firstTurn) {
+      setTimeout(() => void refreshSessions(), 1500);
+      setTimeout(() => void refreshSessions(), 4000);
+    }
+  };
+
   const handleSubmit = async (text: string) => {
     if (busy || !sessionId) return;
     const attached = pendingAttachment;
@@ -216,7 +248,7 @@ export default function Home() {
     try {
       // ---------- Multi-LLM ensemble (bypasses agent + RAG entirely) -----
       if (ensembleEnabled) {
-        const data = await ensembleChat(text, language);
+        const data = await ensembleChat(text, language, sessionId);
         const assistantMsg: ChatMessage = {
           id: assistantId,
           role: "assistant",
@@ -225,13 +257,13 @@ export default function Home() {
           latencyMs: data.total_latency_ms,
         };
         setMessages((prev) => [...prev, assistantMsg]);
-        await refreshSessions();
+        await refreshAfterTurn(wasEmpty);
         return;
       }
 
       // ---------- RAG mode ------------------------------------------------
       if (mode === "rag") {
-        const data = await ragQuery(text, language);
+        const data = await ragQuery(text, language, sessionId);
         const assistantMsg: ChatMessage = {
           id: assistantId,
           role: "assistant",
@@ -330,15 +362,7 @@ export default function Home() {
         }
       }
 
-      await refreshSessions();
-      if (wasEmpty) {
-        setTimeout(() => {
-          void refreshSessions();
-        }, 1500);
-        setTimeout(() => {
-          void refreshSessions();
-        }, 4000);
-      }
+      await refreshAfterTurn(wasEmpty);
     } catch (e) {
       const errorMsg: ChatMessage = {
         id: assistantId,

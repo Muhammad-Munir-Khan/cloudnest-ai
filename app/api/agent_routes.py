@@ -5,12 +5,14 @@ All endpoints require an authenticated user via JWT.
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent import storage
 from app.agent.ensemble import EnsembleResponse, run_ensemble_async
 from app.agent.graph import run_agent, stream_agent
+from app.agent.turns import save_turn, turn_meta
 from app.api.errors import error_reference, internal_error, log_error
 from app.core.auth import current_active_user
 from app.core.schemas import AgentRequest, AgentResponse
@@ -67,6 +69,8 @@ def chat_stream(req: AgentRequest, user: User = Depends(current_active_user)):
 class EnsembleRequest(BaseModel):
     message: str = Field(..., min_length=1)
     language: str = "en"
+    # If set, the question and the verdict are saved to this chat session.
+    session_id: str | None = Field(None, max_length=100)
 
 
 @router.post("/ensemble", response_model=EnsembleResponse)
@@ -77,11 +81,18 @@ async def ensemble(
     """Multi-LLM mode: fan out to several models of the active provider
     (Groq or OpenRouter), then have a judge model rank and synthesize them.
 
-    Doesn't write to storage (see FN-01 in the planner); requires auth and is
+    With a session_id, the question and the final verdict are saved to that
+    chat (the per-model candidates are not stored). Requires auth and is
     covered by the router-level agent rate limit.
     """
     try:
-        return await run_ensemble_async(req.message, language=req.language)
+        result = await run_ensemble_async(req.message, language=req.language)
+        await run_in_threadpool(
+            save_turn, req.session_id, user.id, req.message, result.verdict,
+            turn_meta("ensemble", latency_ms=result.total_latency_ms,
+                      judge_model=result.judge_model),
+        )
+        return result
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:

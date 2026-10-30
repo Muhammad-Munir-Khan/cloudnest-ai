@@ -25,7 +25,6 @@ defensive logic - capable models rarely trigger it, weak models are saved by
 it.
 """
 import json
-import threading
 import time
 import uuid
 from typing import Annotated, NotRequired, TypedDict
@@ -44,6 +43,8 @@ from langgraph.prebuilt import ToolNode
 
 from app.agent import storage
 from app.agent.memory import memory
+from app.agent.titler import maybe_generate_title
+from app.agent.turns import turn_meta
 from app.core.config import settings
 from app.core.language import language_directive
 from app.core.llm import get_llm
@@ -398,41 +399,6 @@ def _extract_sources(messages: list[BaseMessage]) -> list[SourceInfo]:
     return sources
 
 
-def _maybe_generate_title(
-    session_id: str,
-    user_id: str | uuid.UUID,
-    user_message: str,
-    assistant_reply: str,
-) -> None:
-    """Best-effort title generation in a background thread.
-
-    The thread does NOT inherit the parent's contextvars (we use threading.Thread
-    rather than asyncio), so the titler's calls into storage pass user_id
-    explicitly. If it ever needs the RAG layer, it would need to set the
-    contextvar itself first.
-    """
-    from app.agent.titler import generate_title
-
-    def _worker():
-        try:
-            messages = storage.list_messages(session_id, user_id=user_id)
-            user_msgs = [m for m in messages if m["role"] == "user"]
-            if len(user_msgs) != 1:
-                return
-            session = storage.get_session(session_id, user_id=user_id)
-            if not session:
-                return
-            title = generate_title(user_message, assistant_reply)
-            if title:
-                if storage.auto_set_title(session_id, title, user_id=user_id):
-                    log.info("auto-titled %s -> %s", session_id[:8], title)
-        except Exception as e:
-            log.warning("title worker failed: %s", e)
-
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-
-
 def run_agent(
     message: str,
     session_id: str,
@@ -469,20 +435,26 @@ def run_agent(
             answer_msg.content if isinstance(answer_msg, AIMessage) else str(answer_msg)
         )
 
-        memory.append(session_id, HumanMessage(content=message), user_id=user_id)
-        memory.append(session_id, AIMessage(content=answer), user_id=user_id)
-
         tool_calls = _extract_tool_calls(final_messages)
         sources = _extract_sources(final_messages)
+        latency_ms = int((time.time() - t0) * 1000)
+
+        memory.append(session_id, HumanMessage(content=message), user_id=user_id)
+        memory.append(
+            session_id,
+            AIMessage(content=answer),
+            user_id=user_id,
+            meta=turn_meta("agent", sources, tool_calls, latency_ms),
+        )
 
         response = AgentResponse(
             answer=answer,
             sources=sources,
             tool_calls=tool_calls,
             session_id=session_id,
-            latency_ms=int((time.time() - t0) * 1000),
+            latency_ms=latency_ms,
         )
-        _maybe_generate_title(session_id, user_id, message, answer)
+        maybe_generate_title(session_id, user_id, message, answer)
         return response
     finally:
         reset_current_user(token)
@@ -580,11 +552,17 @@ def stream_agent(
                     answer = m.content
                     break
 
-        memory.append(session_id, HumanMessage(content=message), user_id=user_id)
-        memory.append(session_id, AIMessage(content=answer), user_id=user_id)
-
         tool_calls = list(pending_tool_calls.values())
         sources = _extract_sources(final_messages)
+        latency_ms = int((time.time() - t0) * 1000)
+
+        memory.append(session_id, HumanMessage(content=message), user_id=user_id)
+        memory.append(
+            session_id,
+            AIMessage(content=answer),
+            user_id=user_id,
+            meta=turn_meta("agent", sources, tool_calls, latency_ms),
+        )
 
         yield {
             "type": "done",
@@ -592,9 +570,9 @@ def stream_agent(
             "sources": [s.model_dump() for s in sources],
             "tool_calls": [tc.model_dump() for tc in tool_calls],
             "session_id": session_id,
-            "latency_ms": int((time.time() - t0) * 1000),
+            "latency_ms": latency_ms,
         }
 
-        _maybe_generate_title(session_id, user_id, message, answer)
+        maybe_generate_title(session_id, user_id, message, answer)
     finally:
         set_current_user(previous_user)

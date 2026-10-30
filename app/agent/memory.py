@@ -40,13 +40,20 @@ class Memory:
         session_id: str,
         message: BaseMessage,
         user_id: str | uuid.UUID = storage.SYSTEM_USER_ID,
+        meta: dict | None = None,
     ) -> None:
-        """Persist a message. Auto-creates the session if needed."""
+        """Persist a message. Auto-creates the session if needed.
+
+        `meta` (sources, tool calls, ...) is stored with the message for the UI
+        to show again when the session is reloaded; it is never fed back to the
+        model (`get` returns only role and content).
+        """
         role = self._role_for(message)
         storage.append_message(
             session_id=session_id,
             role=role,
             content=message.content,
+            metadata=meta,
             user_id=user_id,
         )
 
