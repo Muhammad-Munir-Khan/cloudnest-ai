@@ -35,6 +35,10 @@ Thumbs.db
 # Generated documentation (kept local; see docs/22-documentation-maintenance.md)
 /docs/
 
+# Developer guide PDF (built by docs/tools/build_dev_guide.py). Listed on its own so
+# it stays out of Git even if the /docs/ rule above is ever removed.
+/docs/CloudNest-Developer-Guide.pdf
+
 # Local assistant/tool files
 /CLAUDE.md
 .claude-flow/
