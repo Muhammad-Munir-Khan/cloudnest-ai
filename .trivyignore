@@ -1,0 +1,23 @@
+# Accepted Trivy findings (same reasons as .pip-audit-ignore). New CVEs on these
+# packages have new IDs and still fail the scan. Review whenever dependencies change.
+
+# PyJWT: fastapi-users pins pyjwt==2.10.1 exactly. CVE-2026-48526 (forged tokens) needs a verifier that accepts both HMAC and asymmetric algorithms via JWKs; this app verifies HS256 only with its own secret. See .pip-audit-ignore.
+CVE-2026-102267
+CVE-2026-102268
+CVE-2026-102271
+CVE-2026-32597
+CVE-2026-48526
+GHSA-pxh4-856f-4h89
+
+# python-multipart: fastapi-users pins python-multipart==0.0.21 exactly. See .pip-audit-ignore.
+CVE-2026-24486
+CVE-2026-42561
+CVE-2026-53539
+
+# sentence-transformers: fix needs sentence-transformers 5 (major); tracked as DEP-03.
+CVE-2026-68770
+
+# transformers: fix needs transformers 5 (major); tracked as DEP-03.
+CVE-2026-4372
+CVE-2026-5241
+CVE-2026-9856

@@ -21,9 +21,11 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pip-audit
-      # Report-only initially (|| true). Remove `|| true` to fail the build on
-      # any known vulnerability once the current backlog is clean.
-      - run: pip-audit -r requirements.txt --desc || true
+      # Fails on any known vulnerability except the advisories accepted (with
+      # reasons) in .pip-audit-ignore.
+      - run: |
+          ids=$(grep -v '^#' .pip-audit-ignore | grep -v '^$' | awk '{print "--ignore-vuln " $1}')
+          pip-audit -r requirements.txt --desc $ids
 
   npm-audit:
     name: Frontend dependency audit
@@ -36,7 +38,7 @@ jobs:
       - working-directory: frontend
         run: npm ci --ignore-scripts
       - working-directory: frontend
-        run: npm audit --audit-level=high || true
+        run: npm audit --audit-level=high
 
   trivy-fs:
     name: Trivy filesystem scan (HIGH/CRITICAL)
@@ -51,6 +53,7 @@ jobs:
           scan-ref: .
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          # exit-code "0" = report-only. Set to "1" to gate the pipeline once
-          # the repo is clean of HIGH/CRITICAL findings.
-          exit-code: "0"
+          # Fails on HIGH/CRITICAL findings except those accepted (with
+          # reasons) in .trivyignore.
+          trivyignores: .trivyignore
+          exit-code: "1"
