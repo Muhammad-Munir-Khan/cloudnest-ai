@@ -7,22 +7,19 @@ logs. In Phase 2 the `audit` logger is routed to a centralized aggregator
 lands in the container's stdout alongside other logs but is cleanly
 distinguishable by the `"event": "audit"` marker and the `audit` logger name.
 
-Captured today (wired in app/core/auth.py):
-  - login success / failure (bad password) / blocked (suspended)
-  - registration
-  - email verification request + success
-  - password reset
+Events emitted today:
+  - app/core/auth.py: login (success / failure / blocked), register,
+    verify.request / verify.success, password.forgot / password.reset /
+    password.change, credentials.change
+  - app/api/admin_routes.py: user.role_change, user.suspend / user.unsuspend,
+    user.force_logout, user.edit, user.send_reset, user.delete, and
+    kb.ingest / kb.upload / kb.delete
 
-To capture admin actions, add a one-liner at each call site in
-app/api/admin_routes.py, e.g.:
+Call it as, e.g.:
 
     from app.core.audit import audit_event
     audit_event("user.role_change", actor=admin.email, target=user.email,
                 old_role=old, new_role=new)
-    audit_event("user.suspend", actor=admin.email, target=user.email)
-    audit_event("user.force_logout", actor=admin.email, target=user.email)
-    audit_event("kb.upload", actor=admin.email, target=source_title)
-    audit_event("kb.delete", actor=admin.email, target=source_title)
 
 Design rule: audit logging must NEVER break the request path. Every call is
 wrapped so a serialization or logging error degrades to a plain log line.

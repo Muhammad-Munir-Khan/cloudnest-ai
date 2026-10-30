@@ -1,8 +1,7 @@
 """Chat session and message models, scoped to a user.
 
-This replaces the old SQLite `app/agent/storage.py` schema. We'll wire the
-storage layer to use these models in Phase 2. For now, just defining the
-shape so migrations can create the tables.
+Persisted by app/agent/storage.py (Postgres, on a background event loop);
+the Alembic migrations create the tables from these models.
 """
 import uuid
 from datetime import datetime, timezone

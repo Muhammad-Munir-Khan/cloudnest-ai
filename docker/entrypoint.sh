@@ -1,16 +1,15 @@
 #!/bin/sh
 # Backend container entrypoint.
 #
-# 1. Wait for Postgres to accept connections (compose healthcheck also gates
-#    this, but we double-check so migrations never race a half-ready DB).
-# 2. Run Alembic migrations to create/upgrade the schema.
-# 3. Start uvicorn.
+# 1. Run Alembic migrations to create/upgrade the schema. Compose only starts
+#    this container after Postgres reports healthy.
+# 2. Start uvicorn.
 #
 # Any failure in migration aborts startup (set -e) so we never serve against
 # an out-of-date schema.
 #
-# PORT: Railway (and most PaaS hosts) inject a $PORT the app must bind. We use
-# it when present and fall back to 8000 so local `docker compose` is unchanged.
+# PORT: hosting platforms often inject a $PORT the app must bind. We use it
+# when present and fall back to 8000 so local `docker compose` is unchanged.
 
 set -e
 

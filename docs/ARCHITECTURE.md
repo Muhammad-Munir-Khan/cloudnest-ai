@@ -1,138 +1,64 @@
 # Architecture
 
-This document describes the design of the GenAI Conversational Automation Agent: what each component does, why it's there, and what the alternatives were.
+An overview of CloudNest.ai: what each part does and why. The README covers setup and the full endpoint list; this file explains how the pieces fit.
 
 ## Goals
 
-1. **Local-first.** The system must run on a developer laptop with no paid APIs.
-2. **Modular.** Swapping the LLM, vector store, or embedder should be a one-line change.
-3. **Production-shaped.** The code should look like something you'd ship, not a notebook.
-4. **Honest.** No fake AGI claims; the agent answers from documents, the web, or arithmetic — and says so.
+1. **Multi-tenant.** Every user's chats, documents and vectors are isolated from every other user's.
+2. **Swappable LLM provider.** One setting (`LLM_PROVIDER`: `groq`, `openrouter` or `ollama`) routes the agent, RAG, ensemble and vision paths.
+3. **Production-shaped.** Auth, rate limiting, audit logging, migrations, health probes, CI and a hardened compose overlay.
+4. **Honest.** Answers come from the user's documents, the shared knowledge base, the web or a tool, with citations; limits are written down in the README.
 
-## Layers
-
-### Core (`app/core/`)
-
-Cross-cutting concerns. `config.py` is `pydantic-settings`-based so every setting can be overridden via environment variables or a `.env`. `llm.py` wraps `ChatOllama` with `lru_cache` so we don't recreate the client on every request. `schemas.py` holds every Pydantic model used at the API boundary, in one place.
-
-### RAG (`app/rag/`)
-
-The retrieval pipeline. `ingestion.py` walks `data/docs/`, loads each file with the right LangChain loader (PyPDFLoader for PDFs, TextLoader for text/markdown), splits into ~800-char chunks with 100-char overlap using `RecursiveCharacterTextSplitter`, embeds with `BAAI/bge-small-en-v1.5`, and persists to Chroma. `retrieval.py` exposes `similarity_search_with_relevance_scores` so the API can show ranking confidence. `chain.py` is the single-shot RAG: retrieve → format context with `[i] filename (p.X)` headers → invoke LLM with a strict system prompt that mandates citations and an "I don't know" fallback.
-
-### Tools (`app/tools/`)
-
-Three tools, each a `@tool`-decorated function that LangChain can introspect:
-
-- **document_search** — wraps the RAG chain. Returns text + source list.
-- **web_search** — DuckDuckGo via `ddgs`. No API key. Returns a bullet list with title, snippet, URL.
-- **calculator** — a hand-rolled AST evaluator that whitelists arithmetic operators only. Refuses names, function calls, and imports. Tested against malicious input.
-
-`registry.py` aggregates them based on settings flags.
-
-### Agent (`app/agent/`)
-
-The conversational engine, built on LangGraph. The state machine has two nodes:
+## System
 
 ```
-START → agent → ┬→ tools → agent → ...
-                └→ END
+Next.js 15 frontend  <--HTTP + SSE-->  FastAPI backend (LangGraph agent)
+                                          |-- LLM provider (Groq / OpenRouter / Ollama)
+                                          |-- Weaviate: per-user tenants + shared GlobalKnowledgeBase
+                                          |-- PostgreSQL: users, roles, sessions, messages, OAuth accounts
+                                          |-- Redis: rate limiting and login/email throttling
+                                          '-- optional: Langfuse (traces), Sentry (errors)
 ```
 
-`agent` is the LLM with tools bound; it produces either a final answer or a `tool_calls` array. `tools` is a prebuilt `ToolNode` that executes the requested tools in parallel and appends `ToolMessage`s back to the state. The conditional edge re-enters `agent` whenever there are tool calls, falls through to `END` otherwise. Recursion is bounded by `max_agent_iterations` to prevent runaway loops.
+## Backend layers (`app/`)
 
-`memory.py` is a simple in-process store keyed by `session_id`, with a per-session `deque(maxlen=N*2)`. Thread-safe via a `Lock`. For multi-replica deployments, the interface is small enough to swap for a Redis backend in ~50 lines.
+- **`core/`** Cross-cutting concerns. `config.py` is the only place settings are read (`pydantic-settings`; 52 required fields, `.env.example` is the complete template). `auth.py` wires fastapi-users (JWT in an httpOnly cookie or a bearer header, OAuth for Google and GitHub, password policy, per-account lockout) and the force-logout freshness check. `roles.py`/`admin_deps.py` implement the three roles (`user`, `corpus_admin`, `super_admin`); `role` is the only source of admin rights. `rate_limit.py` (Redis, client IP from `X-Forwarded-For` only via `TRUSTED_PROXIES`), `security_headers.py`, `body_limit.py`, `audit.py` (structured audit events), `email.py`, `observability.py`.
+- **`rag/`** `collections.py` is the single choke point for per-user Weaviate access: one multi-tenant collection, tenant `user_<hex>` per user, and the tenant is passed on every operation. `ingestion.py` loads PDF, TXT, MD and DOCX, chunks them and indexes into the user's tenant (re-uploading a file replaces its chunks). `global_collection.py` is the shared, admin-curated knowledge base. `retrieval.py` and `chain.py` merge personal and knowledge-base hits for RAG answers. `extraction.py` extracts text from attachments and falls back to the provider's vision model for scanned PDFs and images. `user_context.py` holds the current user in a contextvar so tools never take a `user_id` argument.
+- **`tools/`** Ten LangChain tools registered in `registry.py`: `document_search`, `knowledge_base_search`, `document_summarizer`, `web_search`, `calculator` (AST evaluator, bounded exponentiation), `json_parser`, `datetime_tool`, `unit_converter`, `currency_converter`, `weather`.
+- **`agent/`** `graph.py` is the LangGraph ReAct loop (`agent` node with tools bound, `tools` node) with a dedup tool node that blocks repeated single-shot retrievals within one run; run-scoped state, so concurrent users never share a cache. `memory.py` and `storage.py` keep session history in Postgres (on a background event loop); `titler.py` names chats; `ensemble.py` fans a question out to several models of the active provider and has a judge rank and synthesize them, falling back to the longest valid answer if the judge fails.
+- **`voice/`** `stt.py` (faster-whisper) and `tts.py` (Edge neural voices, or Piper offline).
+- **`api/`** Routers for agent, RAG, voice, attachments and admin, plus shared upload limits and error helpers (clients see a generic message and a reference id; details go to the log).
+- **`models/` + `alembic/`** SQLAlchemy models and migrations; the entrypoint runs `alembic upgrade head` before starting uvicorn.
 
-A subtle but important design choice: we persist only the *human/assistant* pair to memory, not the intermediate tool messages. This keeps the LLM's context clean across turns and prevents memory bloat from large tool outputs.
+The embedding model (`BAAI/bge-m3`, multilingual, 1024 dimensions) is pre-warmed at startup. Changing it changes the vector size, so existing collections must be re-created and documents re-indexed.
 
-### Voice (`app/voice/`)
+## Key flows
 
-`stt.py` wraps faster-whisper. The `WhisperModel` is `lru_cache`d because loading takes 1–3 seconds. Set to `int8` compute type for CPU performance. Voice activity detection (`vad_filter=True`) trims silence automatically.
-
-`tts.py` wraps Piper. Voice models (~60 MB) are downloaded on first use to `~/.cache/piper-voices/`. The synthesis returns raw WAV bytes which the API hands back as `audio/wav`.
-
-### API (`app/api/`)
-
-Three FastAPI routers, one per domain. The shape is intentionally narrow:
-
-- `/rag/ingest`, `/rag/query` — single-shot retrieval
-- `/agent/chat`, `DELETE /agent/sessions/{id}` — multi-turn agent + memory control
-- `/voice/transcribe`, `/voice/tts` — speech I/O
-
-`/health` reports indexing state so the UI can warn when the vectorstore is empty.
-
-### UI (`ui/streamlit_app.py`)
-
-Streamlit because it's the fastest path to a chat UI that displays citations and tool calls. The mode toggle (Agent / RAG only) lets you compare the two paths side-by-side. Voice input goes through a file upload → `/voice/transcribe` → re-injected as the next chat message. TTS is opt-in to keep the default flow snappy.
-
-## Data flow examples
-
-### Question about a document
-
-```
-user types → /agent/chat
-  agent node: LLM sees question, decides "this is about user docs"
-  agent node: emits tool_call for document_search(question="...")
-  tools node: runs document_search → RAG chain → top-4 chunks → LLM → answer + citations
-  agent node: receives tool result, synthesizes final answer
-  END
-```
-
-### Math question
-
-```
-user types "what is 23 * (45 + 7) / 2" → /agent/chat
-  agent node: emits tool_call for calculator(expression="23 * (45 + 7) / 2")
-  tools node: AST evaluator returns "598.0"
-  agent node: "The answer is 598."
-  END
-```
-
-### Multi-turn follow-up
-
-```
-turn 1: "what is 23 * 45?"  → calculator → "1035"
-                             → memory now has [Human, AI]
-turn 2: "now multiply that by 2"
-        → memory loaded, full history sent to agent
-        → calculator(expression="1035 * 2")
-        → "2070"
-```
-
-The model resolves "that" because the previous answer is in its context.
+- **Question about the user's documents:** the agent decides to call `document_search`, which embeds the question, searches the user's tenant and returns text with sources; the agent answers with citations. `/rag/query` runs the same retrieval directly, merging half of the results from the personal tenant and half from the knowledge base.
+- **Streaming:** `/agent/stream` emits Server-Sent Events: token deltas, tool start and end events, then a final event with sources and the session id. The frontend falls back to `/agent/chat` if streaming fails.
+- **Force-logout and suspension:** every token carries `iat`. Every authenticated route runs the freshness check against `users.jwt_invalidated_at`, so an admin's force-logout (or suspension, which sets both `is_active=false` and the cutoff in one update) takes effect on the next request.
+- **Delete a user (admin):** one Postgres transaction removes messages, sessions, OAuth rows and the user; then the Weaviate tenant and on-disk files are removed best-effort.
 
 ## Deployment
 
-`docker/docker-compose.yml` orchestrates three services:
+`docker/docker-compose.yml` runs postgres, redis, weaviate, api and frontend (plus `ollama` and `ollama-pull` with `--profile ollama`). `docker/docker-compose.prod.yml` is an overlay that closes the data-service ports, requires passwords and API keys, and adds Caddy for automatic HTTPS. Health probes: `/health/live` (process up) and `/health/ready` (Postgres required; Redis and Weaviate reported). CI (GitHub Actions) runs the tests, lint, frontend build, image builds and blocking dependency scans. No hosting platform has been chosen yet.
 
-- **ollama** — official image, persistent volume for downloaded models
-- **ollama-pull** — one-shot helper that runs `ollama pull` once Ollama is healthy
-- **api** — Python image with the full app, bind-mounts `./data/` for live document ingestion
-- **ui** — minimal Streamlit container
+## Trade-offs accepted
 
-A shared `hf_cache` volume prevents re-downloading the embedding model on every rebuild.
-
-## Trade-offs explicitly accepted
-
-- **CPU-only inference is slow.** A 3B model on a laptop CPU produces ~10–20 tok/s; first response after a cold start is dominated by model loading. Acceptable for a portfolio project; not acceptable for production. The path to GPU is one Docker flag (`runtime: nvidia`).
-- **Chroma is embedded, not a service.** Single-process only. Great for MVP, doesn't scale horizontally. Migration to Qdrant or pgvector is well-understood.
-- **No streaming.** The API returns full responses. For a real product, switch the agent endpoint to Server-Sent Events and wire Streamlit's `st.write_stream`.
-- **Memory is in-process and lost on restart.** Fine for demo, fine for single-user. Not fine for SaaS.
-- **DuckDuckGo can rate-limit on bursty traffic.** Acceptable for personal use.
-
-## What's deliberately not here
-
-- **Authentication.** No login flow. This is a single-user local tool.
-- **Streaming responses.** The plumbing works but isn't surfaced.
-- **Fine-tuning.** The proposal mentioned it; in practice prompt engineering + RAG outperforms fine-tuning for this scale.
-- **Multi-modal images.** Voice yes, vision no. Adding a vision-capable LLM (e.g. `llava`) would be a few-line change.
+- **The agent gets retrieval as tools, not a prompt prefix,** so the model decides per turn whether to search documents, the knowledge base, the web, or nothing. Two separately scoped retrieval tools avoid the recursion loops an overlapping pair caused.
+- **Shared multi-tenant collection** instead of a collection per user: cleaner operations, with isolation depending on always passing the tenant; an integration test against a real Weaviate guards this.
+- **Rate limiting fails open** when Redis is unreachable (configurable), so a cache outage does not take the app down.
+- **RAG and ensemble turns are not saved to chat history yet** (agent turns are); reloading a session shows only the saved turns.
+- **Prompt injection is not defended against:** a malicious document or web page could try to steer the agent.
+- **CPU-only Ollama is slow;** Groq is the recommended primary path.
 
 ## Where to extend
 
 | Want to... | Touch... |
 |---|---|
-| Add a tool | `app/tools/your_tool.py` + `registry.py` |
-| Swap the LLM | `ollama_chat_model` env var, or `app/core/llm.py` for a non-Ollama backend |
-| Use a different vector DB | `app/rag/retrieval.py` and `app/rag/ingestion.py` |
-| Add streaming | Switch `/agent/chat` to `StreamingResponse` and use `agent.astream_events` |
-| Persist memory across restarts | Replace `MemoryStore` internals with Redis |
-| Add user auth | Add a FastAPI dependency in `app/main.py` and key memory by `user_id` |
+| Add a tool | `app/tools/your_tool.py`, register it in `registry.py`, mention it in the system prompt in `agent/graph.py` |
+| Add a setting | a field in `Settings` (`core/config.py`), `.env.example`, and the README table |
+| Add a route | a router in `app/api/`, mounted in `main.py` with a rate limit and `current_active_user` (or `require_role`) |
+| Change the schema | edit `app/models/`, then `alembic revision --autogenerate -m "..."` |
+| Swap the vector database | `app/rag/collections.py` and `global_collection.py` (all Weaviate access is there) |
+| Add an LLM provider | `core/llm.py` and the provider properties on `Settings` |

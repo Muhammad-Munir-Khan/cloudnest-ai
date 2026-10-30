@@ -2,7 +2,7 @@
 
 Three tiers (source of truth = the `role` column on User):
   user         - regular end user; no admin access
-  corpus_admin - can manage the Global Islamic corpus (ingest, delete content)
+  corpus_admin - can manage the shared knowledge base (ingest, delete content)
   super_admin  - everything corpus_admin can do, PLUS user/role management
 
 `is_superuser` (fastapi-users built-in) is kept auto-synced: a user is a

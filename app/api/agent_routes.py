@@ -74,10 +74,11 @@ async def ensemble(
     req: EnsembleRequest,
     user: User = Depends(current_active_user),
 ):
-    """Multi-LLM mode: fan out to several Groq models, judge their responses.
+    """Multi-LLM mode: fan out to several models of the active provider
+    (Groq or OpenRouter), then have a judge model rank and synthesize them.
 
-    Doesn't write to storage, but still requires auth so we can rate-limit
-    per user later (Phase 3).
+    Doesn't write to storage (see FN-01 in the planner); requires auth and is
+    covered by the router-level agent rate limit.
     """
     try:
         return await run_ensemble_async(req.message, language=req.language)

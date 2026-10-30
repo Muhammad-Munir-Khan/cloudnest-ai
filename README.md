@@ -12,7 +12,7 @@ A self-hostable, multi-tenant conversational AI platform built end-to-end. Combi
 
 ## What it does
 
-- **Per-user document Q&A with real citations.** Every user gets a private Weaviate tenant. Upload PDFs, images, TXT, MD, or DOCX through the UI — every answer surfaces source filenames, page numbers, and similarity scores so you can verify rather than trust.
+- **Per-user document Q&A with real citations.** Every user gets a private Weaviate tenant. Upload PDFs, TXT, MD, or DOCX through the UI (drop images and scanned PDFs into the chat for vision OCR) — every answer surfaces source filenames, page numbers, and similarity scores so you can verify rather than trust.
 - **Shared knowledge base curated by admins.** Upload company policies, product manuals, FAQs once. Every user queries them through the same chat. Citations show which source came from personal documents vs the shared knowledge base, rendered with distinct visual badges.
 - **Real admin panel.** Three-tier role system (user / corpus_admin / super_admin). Manage users, suspend accounts (with optional reason emailed to the user), reset passwords, force-logout active sessions instantly. Curate the shared knowledge base with file uploads and hybrid-search preview. Live system stats.
 - **10-tool agent loop.** A LangGraph ReAct agent decides per turn whether to search the user's documents, search the shared knowledge base, search the web, do math, parse JSON, work with dates, convert units or currency, fetch weather, or just answer.
@@ -28,7 +28,7 @@ A self-hostable, multi-tenant conversational AI platform built end-to-end. Combi
 - **Vision for images and scanned PDFs.** When text extraction falls short, a vision model reads the image directly — provider-aware: Llama-4 Scout 17B on Groq, Llama-3.2-11B-Vision on OpenRouter, or a local `llama3.2-vision` on Ollama. The vision model follows the active provider automatically; webp/gif inputs are normalized to PNG so every provider accepts them. No manual workflow.
 - **Built-in observability.** Langfuse hooks wired into the agent loop. Every run captures tool calls, latencies, token usage, costs. Filter by user, replay tool trees for any failed answer.
 - **Provider abstraction.** Groq, OpenRouter, or Ollama. Switch with `LLM_PROVIDER=...` in `.env`. Same agent loop, same tools, same UX — and the same switch repoints the vision and ensemble paths. The platform is built against a provider interface, not vendor lock-in.
-- **Docker-native.** Single `docker-compose up` brings the full stack online: API, Postgres, Weaviate, Ollama, frontend. Production-quality entrypoints with migrations, healthchecks, and embedded volumes.
+- **Docker-native.** Single `docker compose up` brings the full stack online: API, Postgres, Redis, Weaviate, frontend (Ollama is optional: `--profile ollama`). Production-quality entrypoints with migrations, healthchecks, and embedded volumes.
 - **Light/dark theme.** Branded cyan/teal gradient. CSS-variable architecture, no flash on page load. Theme toggle in both the landing page and the chat sidebar, synced through one hook.
 
 ---
@@ -54,16 +54,16 @@ One `.env` line (`LLM_PROVIDER`) routes the entire app — agent, RAG, ensemble,
 
 Security controls applied across the stack. Everything below is **live in the running app** unless explicitly marked production-only.
 
-- **Rate limiting (Redis-backed).** Per-endpoint limits keyed by client IP: auth 10/min (login brute-force protection), registration 5/min, RAG 60/min, agent 120/min, voice 30/min, attachments 30/min. Fails open if Redis is briefly unavailable, so a cache blip never takes the app down.
+- **Rate limiting (Redis-backed).** Per-endpoint limits keyed by client IP (`X-Forwarded-For` honoured only from `TRUSTED_PROXIES`): auth 10/min, registration 5/min, password reset and email verification 5/min, OAuth 20/min, `/users` 60/min, RAG 60/min, agent 120/min, admin 120/min, voice 30/min, attachments 30/min. On top of that, each account locks after 10 failed logins in 15 minutes (even for the correct password), and each address receives at most 3 reset or verification emails per hour. Fails open if Redis is briefly unavailable (`RATE_LIMIT_FAIL_OPEN=false` to fail closed), so a cache blip never takes the app down.
 - **Security headers on every response.** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, `Strict-Transport-Security`, and a strict `Content-Security-Policy` (relaxed only on the Swagger/redoc paths so the API explorer still renders).
 - **CORS locked to known origins.** Explicit origin allowlist with credentials, tightened methods and headers — no wildcard origins.
-- **Upload hardening.** Size cap (413 over 20MB), extension allowlist, and magic-byte signature checks so a file can't lie about its type — a spoofed `.pdf` or a mislabeled image is rejected before parsing, not after.
+- **Upload hardening.** Size caps (413 over 20MB for attachments, 25MB for knowledge-base files, 10MB for personal documents, plus a 30MB request-body ceiling for everything), extension allowlist, and magic-byte signature checks so a file can't lie about its type — a spoofed `.pdf` or a mislabeled image is rejected before parsing, not after.
 - **Audit logging.** Every security-relevant event — login success/failure/blocked, registration, email verification, password reset, and admin actions (role change, suspend/unblock, force-logout, KB upload/delete) — emits a structured JSON line on a dedicated `audit` logger, ready to ship to a SIEM. Captures who did it and what it affected.
 - **Error tracking (Sentry).** Optional; enabled only when a valid `SENTRY_DSN` is set, and guarded so a blank or malformed DSN can never crash startup. PII is not sent.
 - **Email verification.** Verification-email plumbing wired through fastapi-users; enforcement is opt-in via `REQUIRE_EMAIL_VERIFICATION` (off by default so dev and existing accounts aren't disrupted). OAuth signups are verified automatically.
 - **Secrets.** In development, secrets come from `.env`. In production they can be mounted as files (Docker / Kubernetes secrets at `/run/secrets/<field_name>`); pydantic-settings reads them automatically, with environment variables still taking precedence — so the same code is convenient in dev and safe in prod.
 - **TLS — production overlay.** A Caddy reverse-proxy overlay (`docker/docker-compose.prod.yml` + `docker/Caddyfile`) terminates HTTPS with automatic Let's Encrypt certificates and stops the app/frontend from publishing ports directly. Development is unaffected.
-- **Dependency scanning (CI).** Dependabot plus a GitHub Actions workflow running `pip-audit`, `npm audit`, and Trivy on every push.
+- **Dependency scanning (CI).** Dependabot plus a GitHub Actions workflow running `pip-audit`, `npm audit` (high and above), and Trivy (high/critical) on every push, weekly, and on pull requests. They fail the build; the few advisories that cannot be fixed yet are listed with reasons in `.pip-audit-ignore` and `.trivyignore`.
 - **Global force-logout & account suspension.** As described under the [admin panel](#admin-panel) — every authenticated endpoint enforces the JWT-freshness check.
 
 ---
@@ -158,7 +158,7 @@ A real user-management surface, not a settings page. Surfaced at `/admin` for us
 **Three-tier role system:**
 - `user` — default for new signups. Can use chat, RAG, voice, and query the shared knowledge base.
 - `corpus_admin` — can also manage the shared knowledge base (upload, delete, preview-search).
-- `super_admin` — all of the above, plus user management (create, list, change role, suspend/unblock, reset password, force-logout).
+- `super_admin` — all of the above, plus user management (list, change role, suspend/unblock, edit display name, send password reset, force-logout, delete).
 
 **User management capabilities:**
 - **List users** with role, active status, verification status, creation date
@@ -170,7 +170,7 @@ A real user-management surface, not a settings page. Surfaced at `/admin` for us
 - **Edit display name**.
 
 **Knowledge base management capabilities:**
-- **Upload documents** (.pdf, .txt, .md, .docx, up to 25MB) — chunked + embedded into the shared `GlobalKnowledgeBase` Weaviate collection.
+- **Upload documents** (.pdf, .txt, .md, .docx, up to 25MB) — chunked + embedded into the shared `GlobalKnowledgeBase` Weaviate collection. Uploading a file whose source title (default: the file name) already exists replaces that source's chunks instead of duplicating them.
 - **Structured ingest** via JSON for fine control over per-chunk metadata.
 - **List sources** grouped by source title with chunk counts.
 - **Delete sources** by exact title match.
@@ -203,7 +203,6 @@ cloudnest/
 │   ├── voice/                   # STT (Whisper) + TTS (Edge / Piper)
 │   ├── api/                     # FastAPI route modules (auth, rag, agent, voice, attachments, admin)
 │   ├── models/                  # SQLAlchemy models (user, session, message, oauth_account)
-│   ├── alembic/                 # Database migrations (role, jwt_invalidated_at, created_at, ...)
 │   └── main.py                  # FastAPI entry point with lifespan pre-warm + exception handlers
 │
 ├── frontend/                    # Next.js 15 app
@@ -218,20 +217,22 @@ cloudnest/
 │   └── lib/                     # API client, types, theme hook, auth helpers
 │
 ├── docker/                      # Docker-compose stack + Dockerfiles + entrypoints
-│   ├── docker-compose.yml       # full stack: postgres, redis, weaviate, api, frontend, ollama
+│   ├── docker-compose.yml       # full stack: postgres, redis, weaviate, api, frontend (+ ollama with --profile ollama)
 │   ├── docker-compose.prod.yml  # production overlay: Caddy auto-HTTPS, no public app ports
 │   ├── Caddyfile                # reverse proxy + automatic TLS (production)
-│   ├── Dockerfile.api
-│   ├── Dockerfile.frontend
-│   └── api-entrypoint.sh        # waits for DB, runs alembic upgrade head, then uvicorn
+│   ├── Dockerfile-backend
+│   ├── Dockerfile-frontend
+│   └── entrypoint.sh            # runs alembic upgrade head, then uvicorn on $PORT (default 8000)
 │
-├── scripts/                     # ingestion & testing utilities
-├── tests/                       # pytest test suite (incl. test_security.py)
+├── scripts/                     # smoke_test.py (authenticated end-to-end check of a running stack)
+├── tests/                       # pytest suite; tests/integration needs a running Weaviate
 ├── evals/                       # Ragas RAG evaluation harness
-├── .github/                     # Dependabot config + security-scan CI workflow
+├── .github/                     # Dependabot config + CI (tests, lint, builds) and security-scan workflows
 │
+├── alembic/                     # Database migrations (role, jwt_invalidated_at, created_at, ...)
 ├── data/                        # used by local-dev path only; ignored in Docker
 ├── requirements.txt
+├── requirements-dev.txt         # pytest + ruff (includes requirements.txt)
 ├── .env.example
 └── README.md
 ```
@@ -245,7 +246,7 @@ The whole stack runs in Docker. This is the verified deployment path.
 ### Prerequisites
 - Docker Desktop (or Docker Engine + Compose v2)
 - 16GB RAM recommended (BGE-M3 model + Weaviate + Postgres + frontend)
-- Either a free [Groq API key](https://console.groq.com/keys) or an [OpenRouter key](https://openrouter.ai/keys). Ollama runs inside the Docker stack.
+- Either a free [Groq API key](https://console.groq.com/keys) or an [OpenRouter key](https://openrouter.ai/keys). Ollama is optional and runs inside the Docker stack when started with `--profile ollama`.
 
 ### 1. Clone + configure
 
@@ -320,13 +321,13 @@ If you'd rather run the backend and frontend directly (faster iteration on code,
 ### Prerequisites
 - Python 3.11
 - Node.js 20+
-- Docker (just for Postgres + Weaviate)
+- Docker (just for Postgres, Redis and Weaviate)
 
 ### Steps
 
 ```bash
-# 1. Bring up only postgres + weaviate in Docker, keep api/frontend native
-docker compose -f docker/docker-compose.yml up -d postgres weaviate
+# 1. Bring up only the data services in Docker, keep api/frontend native
+docker compose -f docker/docker-compose.yml up -d postgres weaviate redis
 
 # 2. Backend
 python -m venv .venv
@@ -363,7 +364,7 @@ Open **http://localhost:3000** (not `127.0.0.1` — cookie auth is scoped to `lo
 
 ## Configuration
 
-Every tunable lives in `.env`. Env var names are uppercase; `LLM_PROVIDER` takes a lowercase value. Highlights:
+Every tunable lives in `.env`. Env var names are uppercase; `LLM_PROVIDER` takes a lowercase value. Start from `cp .env.example .env`: 52 of the 70 settings have no built-in default and must be present, and the "Default" column below shows the values in that template (only the runtime flags `REDIS_URL`, `COOKIE_SECURE`, `REQUIRE_EMAIL_VERIFICATION`, `SENTRY_DSN`, `ENVIRONMENT` and `SENTRY_TRACES_SAMPLE_RATE` have real built-in defaults). Highlights:
 
 | Variable                            | Default                            | Description                                                |
 |-------------------------------------|------------------------------------|------------------------------------------------------------|
@@ -406,7 +407,7 @@ See `.env.example` for the full reference with comments.
 
 ## API reference
 
-The full API surface — 49 endpoints across 7 functional groups. Interactive docs with request/response schemas live at **http://localhost:8000/docs** (Swagger UI) and **http://localhost:8000/redoc**.
+The full API surface — 49 endpoints across 8 functional groups. Interactive docs with request/response schemas live at **http://localhost:8000/docs** (Swagger UI) and **http://localhost:8000/redoc**.
 
 Most authenticated endpoints enforce the JWT-freshness check, so a force-logout immediately invalidates active sessions. Browser clients authenticate via the httpOnly cookie set by `/auth/cookie/login`; CLI tools and scripts use `Authorization: Bearer <token>` headers from `/auth/jwt/login`. Same JWT under the hood, two transport mechanisms.
 
@@ -437,17 +438,14 @@ User authentication via fastapi-users — dual JWT/cookie transport, password re
 
 ### Users (`/users/*`)
 
-User profile management — fastapi-users' standard router. The `/users/{id}` endpoints require `is_superuser=True` (auto-synced with the `super_admin` role).
+Own-profile management from fastapi-users' router. Only `/users/me` is mounted; the built-in `/users/{id}` routes are not (they authorized on `is_superuser` instead of role), so `role` is the only source of admin rights and user management lives under `/admin/users/*`.
 
 | Method | Path                            | Purpose                                                  |
 |--------|---------------------------------|----------------------------------------------------------|
 | GET    | `/users/me`                     | Current user info (id, email, role, display_name, ...)   |
-| PATCH  | `/users/me`                     | Update own profile (display_name, password)              |
-| GET    | `/users/{id}`                   | Get any user by ID (super_admin only)                    |
-| PATCH  | `/users/{id}`                   | Update any user (super_admin only) — including role changes which trigger `is_superuser` sync |
-| DELETE | `/users/{id}`                   | Hard-delete a user (super_admin only). Cascades through sessions/messages/OAuth accounts. Use with caution — for normal account deactivation, prefer `PATCH /admin/users/{id}/active` which suspends with email notification |
+| PATCH  | `/users/me`                     | Update own profile (display_name, password, email). Changing the password or email requires `current_password`; `is_superuser`, `is_active` and `is_verified` are ignored |
 
-> The admin panel uses the `/admin/users/*` endpoints rather than `/users/{id}` for user management because the admin routes carry first-class behaviors like auto-force-logout-on-block, suspension emails, and audit logging. The `/users/{id}` endpoints are the raw fastapi-users surface — useful for scripting and administration that needs the cascade-delete behavior.
+> The admin panel uses `/admin/users/*` for user management because those routes carry first-class behaviors: auto-force-logout-on-block, suspension emails, audit logging, and full data cleanup (Postgres rows, Weaviate tenant, on-disk files) on delete.
 
 ### RAG (`/rag/*`)
 
@@ -457,12 +455,13 @@ Per-user document indexing and retrieval. Every endpoint operates on the authent
 |--------|---------------------------------|----------------------------------------------------------|
 | POST   | `/rag/query`                    | Single-shot RAG Q&A with citations. Merges retrieval from personal docs + shared knowledge base. Returns `{answer, sources[], latency_ms}` |
 | GET    | `/rag/documents`                | List the authenticated user's indexed documents          |
-| POST   | `/rag/documents`                | Upload + index a document (PDF, TXT, MD, DOCX, image) into the user's tenant |
+| POST   | `/rag/documents`                | Upload + index a document (PDF, TXT, MD, DOCX; 10MB cap) into the user's tenant. Re-uploading a file name replaces its chunks; the response says how many were replaced |
 | DELETE | `/rag/documents/{filename}`     | Remove a document from the user's tenant                 |
 | POST   | `/rag/reindex`                  | Re-index every file in the user's docs folder (useful after embedding model changes) |
 
 **Honest notes:**
 - `/rag/query` always queries **both** personal docs and the shared knowledge base in a merged top-k retrieval. Source objects carry an `origin` field (`"personal"` or `"knowledge_base"`) so the UI can render distinct badges. This is different from the agent flow, where the LLM picks per-turn whether to call `document_search` or `knowledge_base_search`.
+- Name matching for replace/delete is exact (Weaviate tokenizes file names by word, so near matches such as `a.txt` / `b.txt` are filtered out).
 - Reindex is needed when changing `EMBEDDING_MODEL` — existing vectors are locked at the dimension they were created with; the model swap requires dropping collections and re-ingesting.
 
 ### Agent (`/agent/*`)
@@ -542,6 +541,8 @@ User management, knowledge base curation, and system stats. Gated by role:
 | Method | Path                            | Purpose                                                  |
 |--------|---------------------------------|----------------------------------------------------------|
 | GET    | `/health`                       | Public health check. Returns `{status, version, provider, model, embedding_model, voice_enabled, tts_backend}`. Used by Docker healthchecks and ops monitoring |
+| GET    | `/health/live`                  | Liveness probe: the process is up. Checks nothing external, so a database blip never triggers restarts |
+| GET    | `/health/ready`                 | Readiness probe: checks Postgres (required) and Redis/Weaviate (reported, degrade only). `503` when Postgres is down |
 | GET    | `/`                             | Public service root. Returns a self-description listing main endpoint paths — useful for discovering the API surface from a curl |
 
 ---
@@ -552,25 +553,24 @@ User management, knowledge base curation, and system stats. Gated by role:
 |-----------------|-----------------------------------------------------------------------------------|
 | `/auth/*`       | Public (these issue auth, they don't consume it)                                  |
 | `/users/me`     | Any authenticated user                                                            |
-| `/users/{id}`   | `super_admin` (via `is_superuser`)                                                |
 | `/rag/*`        | Any authenticated user                                                            |
 | `/agent/*`      | Any authenticated user                                                            |
 | `/voice/*`      | Any authenticated user                                                            |
 | `/attachments/*`| Any authenticated user                                                            |
 | `/admin/users/*`, `/admin/stats` | `super_admin`                                                    |
 | `/admin/corpus/*` | `corpus_admin` or `super_admin`                                                 |
-| `/health`, `/`  | Public                                                                            |
+| `/health*`, `/` | Public                                                                            |
 
 Every authenticated endpoint runs the JWT-freshness check against `users.jwt_invalidated_at`, so force-logout is enforced globally — chat, RAG, voice, attachments, sessions, admin. There is no authenticated route that lets a force-logged-out token survive.
 
 ## Testing
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt   # pytest + ruff (and the runtime requirements)
 pytest
 ```
 
-Tests cover the calculator (including malicious-input rejection), schema validation, memory eviction, tool argument parsing, the tool-call de-duplication logic, authentication flows, and the security layer (upload signature sniffing, rate-limit keying, the Sentry DSN guard, the secrets loader, and security headers — see `tests/test_security.py`). They run in a few seconds and don't require external services.
+Tests cover the calculator (including malicious-input rejection), schema validation, memory eviction, tool argument parsing, the tool-call de-duplication logic, authentication flows, and the security layer (upload signature sniffing, rate-limit keying, the Sentry DSN guard, the secrets loader, and security headers — see `tests/test_security.py`). Most tests need no external services. `tests/integration/` (tenant isolation, replace-on-re-upload) runs against a real Weaviate with a fake embedder and is skipped when none is reachable: start one with `docker compose -f docker/docker-compose.yml up -d weaviate` (set `WEAVIATE_URL=http://localhost:8080` if `.env` uses the Docker hostname). CI starts one automatically and also runs `ruff` and ESLint as blocking checks. `python scripts/smoke_test.py` checks a running stack end to end (signup, login, chat).
 
 For RAG quality evaluation:
 
@@ -616,7 +616,7 @@ I'd rather list these than have a recruiter find them:
 - **Strict language switching is prompt-enforced, not guaranteed.** The directive is sent every turn and placed last so it overrides conversation history. On capable models (Groq, paid OpenRouter) the selected language is honored reliably; on the weakest models it's greatly improved but can occasionally drift. A deterministic post-generation translate pass would close the gap entirely but isn't implemented — it wasn't needed for the primary path.
 - **No prompt-injection defense.** A malicious document or attachment could try to manipulate the agent. Production deployments in regulated industries would want a content classifier on uploaded files.
 - **LLM-as-judge bias in the ensemble.** The judge is biased toward verbose/confident answers. Mitigated by mixing model families but not eliminated.
-- **Managed production infrastructure is the next milestone.** TLS (a Caddy auto-HTTPS overlay), file-based secrets, security headers, CORS lockdown, Redis-backed rate limiting, audit logging, and dependency scanning are now in place. What remains for a fully hardened production deploy is managed Postgres and Weaviate, object storage for uploads, automated backups, and orchestration (Kubernetes) beyond docker-compose.
+- **Managed production infrastructure is the next milestone.** TLS (a Caddy auto-HTTPS overlay), file-based secrets, security headers, CORS lockdown, Redis-backed rate limiting, audit logging, blocking dependency scans and a CI pipeline (tests, lint, image builds) are now in place. No hosting platform has been chosen yet. What remains for a fully hardened production deploy is managed Postgres and Weaviate, object storage for uploads, automated backups, and orchestration (Kubernetes) beyond docker-compose.
 - **No frontend in-flight kick on force-logout.** Force-logout is enforced server-side on the user's next request. If they're idle in the chat UI, the UI doesn't proactively boot them — the next click does. A WebSocket-pushed logout would close that gap but adds significant complexity.
 
 ---
@@ -642,11 +642,11 @@ A few things tutorials don't cover:
 
 ## Roadmap
 
-**Recently shipped — security & hardening:** Redis-backed rate limiting, security headers + CORS lockdown, magic-byte upload validation, structured audit logging (auth events *and* admin actions), optional Sentry error tracking, opt-in email verification, file-based secret support, a Caddy TLS overlay for production, and dependency scanning in CI. Details in [Security & hardening](#security--hardening).
+**Recently shipped — security & hardening:** Redis-backed rate limiting, security headers + CORS lockdown, magic-byte upload validation, structured audit logging (auth events *and* admin actions), optional Sentry error tracking, opt-in email verification, file-based secret support, a Caddy TLS overlay for production, and blocking dependency scanning in CI. Details in [Security & hardening](#security--hardening).
 
 What's next, ordered by priority:
 
-1. **Managed production infrastructure.** Managed Postgres and Weaviate, object storage for uploaded files, automated backups, and a CI/CD pipeline (test → build → scan → deploy). Kubernetes manifests as an alternative to docker-compose.
+1. **Managed production infrastructure.** Managed Postgres and Weaviate, object storage for uploaded files, automated backups, and automated deployment (CI already runs test → build → scan). Kubernetes manifests as an alternative to docker-compose.
 2. **Rebuild `python_repl` and `csv_reader` with a persistent Jupyter-style kernel.** Faster (no subprocess boot per call), more reliable (state persists across calls), pair with a larger tool-calling model.
 3. **Langfuse dashboards for admin panel.** The traces are already captured; surface them in the UI for super_admins.
 4. **Ragas-based eval harness in CI.** Measure retrieval quality on every change to the RAG pipeline.
