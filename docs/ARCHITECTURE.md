@@ -49,7 +49,7 @@ The embedding model (`BAAI/bge-m3`, multilingual, 1024 dimensions) is pre-warmed
 - **Shared multi-tenant collection** instead of a collection per user: cleaner operations, with isolation depending on always passing the tenant; an integration test against a real Weaviate guards this.
 - **Rate limiting fails open** when Redis is unreachable (configurable), so a cache outage does not take the app down.
 - **All chat modes are saved to the history** with their sources and tool calls (`chat_messages.meta`); ensemble turns keep only the question and final verdict, not the per-model candidates, so a reloaded ensemble turn shows as plain text.
-- **Prompt injection is not defended against:** a malicious document or web page could try to steer the agent.
+- **Prompt injection is mitigated, not solved:** untrusted text is declared data in the system prompt, attachments cannot close their own delimiters, and `web_search` queries that copy the user's private text (or are over 200 characters) are blocked (`agent/guard.py`). A reworded copy gets through, and a persuaded model can still mislead the user.
 - **CPU-only Ollama is slow;** Groq is the recommended primary path.
 
 ## Where to extend
