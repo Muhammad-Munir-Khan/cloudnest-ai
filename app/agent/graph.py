@@ -24,6 +24,7 @@ nudge to answer from what's already been gathered. This is provider-agnostic
 defensive logic - capable models rarely trigger it, weak models are saved by
 it.
 """
+import contextvars
 import json
 import time
 import uuid
@@ -51,7 +52,7 @@ from app.core.llm import get_llm
 from app.core.logging import get_logger
 from app.core.observability import get_langfuse_handler
 from app.core.schemas import AgentResponse, SourceInfo, ToolCall
-from app.rag.user_context import get_current_user, reset_current_user, set_current_user
+from app.rag.user_context import reset_current_user, set_current_user
 from app.tools.registry import get_tools
 
 log = get_logger(__name__)
@@ -496,109 +497,129 @@ def stream_agent(
 ):
     """Stream agent execution as a sequence of events.
 
-    Sets the current_user contextvar for the duration of the stream so any
-    tool calls invoked during execution see the right user.
-
-    NOTE: this is a sync generator consumed by StreamingResponse, which pumps
-    it on threadpool threads. A contextvar Token is bound to the context that
-    created it, so reset_current_user(token) in a finally could run in a
-    DIFFERENT context than set_current_user ran in -> "Token was created in a
-    different Context", which crashed the stream and forced the client to fall
-    back to /agent/chat. We therefore capture the previous value and restore it
-    by *setting* it back (context-safe) instead of resetting a token.
+    The tools read the current user from a contextvar, so it must be set for
+    every step of the run. This is a sync generator consumed by
+    StreamingResponse, which pumps each step on a thread-pool thread with its
+    own copy of the caller's context, and LangGraph starts the tools node on
+    yet another thread from whatever context is current. A user set once at the
+    top of the generator therefore did not reach the tools, which then used the
+    shared system user and found no documents. So the whole run executes inside
+    one dedicated context that has the user set: every step, and every thread
+    LangGraph starts from it, sees the right user, and nothing leaks into the
+    caller's context.
     """
-    previous_user = get_current_user()
-    set_current_user(user_id)
+    context = contextvars.copy_context()
+    context.run(set_current_user, user_id)
+    events = _stream_agent_events(
+        message, session_id, attachment_text, attachment_name, language, user_id
+    )
     try:
-        t0 = time.time()
-        history = memory.get(session_id, user_id=user_id)
+        while True:
+            try:
+                event = context.run(next, events)
+            except StopIteration:
+                return
+            yield event
+    finally:
+        context.run(events.close)
 
-        user_content = _build_user_content(message, attachment_text, attachment_name)
-        system_prompt = SYSTEM_PROMPT + language_directive(language)
 
-        messages = _assemble_messages(system_prompt, history, user_content, language)
+def _stream_agent_events(
+    message: str,
+    session_id: str,
+    attachment_text: str | None,
+    attachment_name: str | None,
+    language: str,
+    user_id: str | uuid.UUID,
+):
+    """The streaming run itself; stream_agent supplies the user context."""
+    t0 = time.time()
+    history = memory.get(session_id, user_id=user_id)
 
-        config = _build_config(user_id, session_id)
+    user_content = _build_user_content(message, attachment_text, attachment_name)
+    system_prompt = SYSTEM_PROMPT + language_directive(language)
 
-        accumulated_answer = ""
-        final_messages: list[BaseMessage] = []
-        pending_tool_calls: dict = {}
+    messages = _assemble_messages(system_prompt, history, user_content, language)
 
-        for event in get_graph().stream(
-            {"messages": messages},
-            config=config,
-            stream_mode=["updates", "messages"],
-        ):
-            mode, payload = event
+    config = _build_config(user_id, session_id)
 
-            if mode == "messages":
-                chunk, meta = payload
-                if isinstance(chunk, AIMessageChunk) and meta.get("langgraph_node") == "agent":
-                    if chunk.content:
-                        accumulated_answer += chunk.content
-                        yield {"type": "token", "delta": chunk.content}
+    accumulated_answer = ""
+    final_messages: list[BaseMessage] = []
+    pending_tool_calls: dict = {}
 
-            elif mode == "updates":
-                for state in payload.values():
-                    if not isinstance(state, dict):
-                        continue
-                    new_msgs = state.get("messages", [])
-                    if not isinstance(new_msgs, list):
-                        new_msgs = [new_msgs]
+    for event in get_graph().stream(
+        {"messages": messages},
+        config=config,
+        stream_mode=["updates", "messages"],
+    ):
+        mode, payload = event
 
-                    for m in new_msgs:
-                        final_messages.append(m)
+        if mode == "messages":
+            chunk, meta = payload
+            if isinstance(chunk, AIMessageChunk) and meta.get("langgraph_node") == "agent":
+                if chunk.content:
+                    accumulated_answer += chunk.content
+                    yield {"type": "token", "delta": chunk.content}
 
-                        if isinstance(m, AIMessage) and m.tool_calls:
-                            for tc in m.tool_calls:
-                                pending_tool_calls[tc["id"]] = ToolCall(
-                                    name=tc["name"], args=tc.get("args", {})
-                                )
-                                yield {
-                                    "type": "tool_start",
-                                    "name": tc["name"],
-                                    "args": tc.get("args", {}),
-                                }
+        elif mode == "updates":
+            for state in payload.values():
+                if not isinstance(state, dict):
+                    continue
+                new_msgs = state.get("messages", [])
+                if not isinstance(new_msgs, list):
+                    new_msgs = [new_msgs]
 
-                        elif isinstance(m, ToolMessage):
-                            preview = (m.content or "")[:200]
-                            tc = pending_tool_calls.get(m.tool_call_id)
-                            if tc:
-                                tc.result_preview = preview
+                for m in new_msgs:
+                    final_messages.append(m)
+
+                    if isinstance(m, AIMessage) and m.tool_calls:
+                        for tc in m.tool_calls:
+                            pending_tool_calls[tc["id"]] = ToolCall(
+                                name=tc["name"], args=tc.get("args", {})
+                            )
                             yield {
-                                "type": "tool_end",
-                                "name": tc.name if tc else "tool",
-                                "preview": preview,
+                                "type": "tool_start",
+                                "name": tc["name"],
+                                "args": tc.get("args", {}),
                             }
 
-        answer = accumulated_answer
-        if not answer:
-            for m in reversed(final_messages):
-                if isinstance(m, AIMessage):
-                    answer = m.content
-                    break
+                    elif isinstance(m, ToolMessage):
+                        preview = (m.content or "")[:200]
+                        tc = pending_tool_calls.get(m.tool_call_id)
+                        if tc:
+                            tc.result_preview = preview
+                        yield {
+                            "type": "tool_end",
+                            "name": tc.name if tc else "tool",
+                            "preview": preview,
+                        }
 
-        tool_calls = list(pending_tool_calls.values())
-        sources = _extract_sources(final_messages)
-        latency_ms = int((time.time() - t0) * 1000)
+    answer = accumulated_answer
+    if not answer:
+        for m in reversed(final_messages):
+            if isinstance(m, AIMessage):
+                answer = m.content
+                break
 
-        memory.append(session_id, HumanMessage(content=message), user_id=user_id)
-        memory.append(
-            session_id,
-            AIMessage(content=answer),
-            user_id=user_id,
-            meta=turn_meta("agent", sources, tool_calls, latency_ms),
-        )
+    tool_calls = list(pending_tool_calls.values())
+    sources = _extract_sources(final_messages)
+    latency_ms = int((time.time() - t0) * 1000)
 
-        yield {
-            "type": "done",
-            "answer": answer,
-            "sources": [s.model_dump() for s in sources],
-            "tool_calls": [tc.model_dump() for tc in tool_calls],
-            "session_id": session_id,
-            "latency_ms": latency_ms,
-        }
+    memory.append(session_id, HumanMessage(content=message), user_id=user_id)
+    memory.append(
+        session_id,
+        AIMessage(content=answer),
+        user_id=user_id,
+        meta=turn_meta("agent", sources, tool_calls, latency_ms),
+    )
 
-        maybe_generate_title(session_id, user_id, message, answer)
-    finally:
-        set_current_user(previous_user)
+    yield {
+        "type": "done",
+        "answer": answer,
+        "sources": [s.model_dump() for s in sources],
+        "tool_calls": [tc.model_dump() for tc in tool_calls],
+        "session_id": session_id,
+        "latency_ms": latency_ms,
+    }
+
+    maybe_generate_title(session_id, user_id, message, answer)
