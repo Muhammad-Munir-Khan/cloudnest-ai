@@ -17,6 +17,7 @@ Design note (intentional, mirrors web_search NOT document_search):
 """
 from langchain_core.tools import tool
 
+from app.core.schemas import SourceInfo
 from app.rag.global_collection import global_search
 
 # Tunable: how many KB chunks the agent sees per call.
@@ -27,8 +28,28 @@ _TOP_K = 5
 _SNIPPET_CHARS = 600
 
 
-@tool
-def knowledge_base_search(question: str) -> str:
+def _source_info(doc, score) -> SourceInfo:
+    """Citation for one knowledge-base hit (what the UI shows)."""
+    md = doc.metadata or {}
+    # KB uses source_title (set by admin upload); page may be a string
+    # (it comes from PDF loaders as a str sometimes).
+    title = md.get("source_title") or md.get("book_title") or "unknown"
+    raw_page = md.get("page")
+    try:
+        page = int(raw_page) if raw_page not in (None, "", "?") else None
+    except (TypeError, ValueError):
+        page = None
+    return SourceInfo(
+        source_file=title,
+        page=page,
+        snippet=doc.page_content[:240],
+        score=round(float(score), 3) if score is not None else None,
+        origin="knowledge_base",
+    )
+
+
+@tool(response_format="content_and_artifact")
+def knowledge_base_search(question: str) -> tuple[str, list[dict]]:
     """Search the shared knowledge base (admin-curated, available to everyone).
 
     Use this when the question is about content that an administrator would
@@ -44,10 +65,10 @@ def knowledge_base_search(question: str) -> str:
     try:
         results = global_search(question, k=_TOP_K)
     except Exception as e:
-        return f"Knowledge base search failed: {e}"
+        return f"Knowledge base search failed: {e}", []
 
     if not results:
-        return "No matching information found in the shared knowledge base."
+        return "No matching information found in the shared knowledge base.", []
 
     lines: list[str] = []
     for i, (doc, score) in enumerate(results, start=1):
@@ -73,4 +94,6 @@ def knowledge_base_search(question: str) -> str:
         lines.append(text)
         lines.append("")  # blank line between hits
 
-    return "\n".join(lines).rstrip()
+    # Second value is an artifact (structured sources for the UI); the graph
+    # reads it instead of searching again.
+    return "\n".join(lines).rstrip(), [_source_info(d, s).model_dump() for d, s in results]

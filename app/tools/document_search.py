@@ -10,8 +10,8 @@ from langchain_core.tools import tool
 from app.rag.chain import rag_answer_personal_only
 
 
-@tool
-def document_search(question: str) -> str:
+@tool(response_format="content_and_artifact")
+def document_search(question: str) -> tuple[str, list[dict]]:
     """Search the user's OWN indexed documents (personal uploads only).
 
     Use this for questions about files the user uploaded themselves. For
@@ -29,6 +29,11 @@ def document_search(question: str) -> str:
     """
     result = rag_answer_personal_only(question)
     if not result.sources:
-        return "No matching information found in the user's personal documents."
+        return "No matching information found in the user's personal documents.", []
     sources_str = ", ".join(s.source_file for s in result.sources)
-    return f"{result.answer}\n\nSources: {sources_str}"
+    # The second value is an artifact: structured sources for the UI. It is not
+    # shown to the model, and the graph reads it instead of searching again.
+    return (
+        f"{result.answer}\n\nSources: {sources_str}",
+        [s.model_dump() for s in result.sources],
+    )

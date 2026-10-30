@@ -369,93 +369,32 @@ def _extract_tool_calls(messages: list[BaseMessage]) -> list[ToolCall]:
     return calls
 
 
-def _sources_from_personal(question: str) -> list[SourceInfo]:
-    """Re-run a personal-tenant retrieval for the given question.
+# Tools whose ToolMessage artifact carries structured sources (see
+# tools/document_search.py and tools/knowledge_base.py). Personal first.
+_SOURCE_TOOLS = ("document_search", "knowledge_base_search")
 
-    Parallels the existing pattern: we re-issue the search to get fresh
-    (doc, score) pairs we can turn into SourceInfo. Cheap (<100ms).
+
+def _extract_sources(messages: list[BaseMessage]) -> list[SourceInfo]:
+    """Build the final SourceInfo list from what the search tools returned.
+
+    The citations are the ones the tool actually produced for the model (its
+    ToolMessage artifact), not a second search that could differ or fail. When
+    a tool ran more than once this turn, its LAST result is used. Suppressed
+    repeats carry no artifact and are ignored. Personal sources come first,
+    then knowledge-base sources.
     """
-    from app.rag.retrieval import retrieve
+    last: dict[str, list] = {}
+    for m in messages:
+        if isinstance(m, ToolMessage) and m.name in _SOURCE_TOOLS and isinstance(m.artifact, list):
+            last[m.name] = m.artifact
 
-    try:
-        pairs = retrieve(question)
-    except Exception as e:
-        log.debug("_sources_from_personal failed: %s", e)
-        return []
-    return [
-        SourceInfo(
-            source_file=(d.metadata or {}).get("source_file", "unknown"),
-            page=(d.metadata or {}).get("page"),
-            snippet=d.page_content[:240],
-            score=round(s, 3) if s is not None else None,
-            origin="personal",
-        )
-        for d, s in pairs
-    ]
-
-
-def _sources_from_knowledge_base(question: str) -> list[SourceInfo]:
-    """Re-run a global-KB retrieval for the given question.
-
-    Same shape as _sources_from_personal but uses global_search. Each returned
-    SourceInfo is tagged origin="knowledge_base".
-    """
-    from app.rag.global_collection import global_search
-
-    try:
-        pairs = global_search(question, k=5)
-    except Exception as e:
-        log.debug("_sources_from_knowledge_base failed: %s", e)
-        return []
-    out: list[SourceInfo] = []
-    for d, s in pairs:
-        md = d.metadata or {}
-        # KB uses source_title (set by admin upload); page may be a string
-        # (it comes from PDF loaders as a str sometimes).
-        title = md.get("source_title") or md.get("book_title") or "unknown"
-        raw_page = md.get("page")
-        try:
-            page_val = int(raw_page) if raw_page not in (None, "", "?") else None
-        except (TypeError, ValueError):
-            page_val = None
-        out.append(
-            SourceInfo(
-                source_file=title,
-                page=page_val,
-                snippet=d.page_content[:240],
-                score=round(float(s), 3) if s is not None else None,
-                origin="knowledge_base",
-            )
-        )
-    return out
-
-
-def _extract_sources(tool_calls: list[ToolCall]) -> list[SourceInfo]:
-    """Build the final SourceInfo list from the agent's tool calls.
-
-    We re-run retrieval for the LAST question seen for each retrieval-style
-    tool, so the citations the UI shows match what the agent actually used.
-    Both personal docs (document_search) and the shared KB
-    (knowledge_base_search) are supported; results are concatenated.
-    """
     sources: list[SourceInfo] = []
-
-    last_doc_q = next(
-        (tc.args.get("question") for tc in reversed(tool_calls)
-         if tc.name == "document_search"),
-        None,
-    )
-    if last_doc_q:
-        sources.extend(_sources_from_personal(last_doc_q))
-
-    last_kb_q = next(
-        (tc.args.get("question") for tc in reversed(tool_calls)
-         if tc.name == "knowledge_base_search"),
-        None,
-    )
-    if last_kb_q:
-        sources.extend(_sources_from_knowledge_base(last_kb_q))
-
+    for name in _SOURCE_TOOLS:
+        for item in last.get(name, []):
+            try:
+                sources.append(SourceInfo(**item))
+            except Exception as e:
+                log.debug("skipping malformed source from %s: %s", name, e)
     return sources
 
 
@@ -534,7 +473,7 @@ def run_agent(
         memory.append(session_id, AIMessage(content=answer), user_id=user_id)
 
         tool_calls = _extract_tool_calls(final_messages)
-        sources = _extract_sources(tool_calls)
+        sources = _extract_sources(final_messages)
 
         response = AgentResponse(
             answer=answer,
@@ -645,7 +584,7 @@ def stream_agent(
         memory.append(session_id, AIMessage(content=answer), user_id=user_id)
 
         tool_calls = list(pending_tool_calls.values())
-        sources = _extract_sources(tool_calls)
+        sources = _extract_sources(final_messages)
 
         yield {
             "type": "done",
