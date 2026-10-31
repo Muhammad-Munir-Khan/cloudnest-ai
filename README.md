@@ -85,59 +85,197 @@ Security controls applied across the stack. Everything below is **live in the ru
 
 ## Architecture
 
+### System overview
+
+```mermaid
+flowchart TB
+    browser["Browser<br/>Next.js 15 · Tailwind · SSE"]
+
+    subgraph backend["FastAPI backend"]
+        direction TB
+        routes["Middleware and routers<br/>auth · rate limits · security headers · RBAC"]
+        subgraph services["AI services"]
+            direction LR
+            agent["LangGraph agent<br/>10 tools"]
+            ensemble["Multi-LLM<br/>ensemble"]
+            rag["RAG chains<br/>cited answers"]
+            media["Voice and vision<br/>Whisper · Edge TTS · OCR"]
+        end
+        routes --> services
+    end
+
+    pg[("PostgreSQL<br/>users · chats · messages")]
+    redis[("Redis<br/>rate limits · lockout")]
+    weaviate[("Weaviate<br/>per-user tenants + shared KB")]
+    llm["LLM provider<br/>Groq · OpenRouter · Ollama"]
+    langfuse["Langfuse<br/>optional traces"]
+
+    browser -- "HTTPS · cookie or bearer JWT" --> routes
+    routes --> pg
+    routes --> redis
+    services --> weaviate
+    services --> llm
+    services -.-> langfuse
 ```
-+--------------------------+          +--------------------------+
-|   Next.js 15 frontend    |   HTTP   |    FastAPI backend       |
-|   (Tailwind + SSE)       | <------> |  (LangGraph + agents)    |
-+--------------------------+          +--------------------------+
-                                                  |
-   +---------------+----------------+--------------+--------------+
-   v               v                v                             v
-+----------+ +-----------+ +-----------------+         +-------------------+
-|   LLM    | |  Tools    | |  RAG pipeline   |         |  Admin panel      |
-| provider | | registry  | |  Weaviate +     |         |  user mgmt, KB    |
-| Groq /   | | (10       | |  BGE-M3         |         |  curation, role   |
-| Open     | | tools)    | |  per-user       |         |  enforcement      |
-| Router / | +-----------+ |  tenant +       |         +-------------------+
-| Ollama   |       |       |  shared KB      |
-+----------+       v       +-----------------+
-            +-----------------+        +----------------+
-            |  Voice & vision |        |    Langfuse    |
-            |  Whisper + Edge |        |  observability |
-            |  vision: per-   |        +----------------+
-            |  provider model |
-            +-----------------+
 
-+----------------------------------------------------------------+
-|                       PostgreSQL                                |
-|  users · roles · sessions · messages · OAuth accounts          |
-|  jwt_invalidated_at · alembic migrations                       |
-+----------------------------------------------------------------+
+### Agent loop
+
+A LangGraph state machine: the model either answers or asks for tools, and the tools node feeds the results back.
+
+```mermaid
+flowchart TD
+    start(["Message + session history"]) --> agent["agent node<br/>LLM with 10 bound tools"]
+    agent --> decision{"Tool calls<br/>requested?"}
+    decision -- "no" --> save["Save the turn to Postgres<br/>answer · sources · tool calls · latency"]
+    save --> finish(["Send the done event"])
+    decision -- "yes" --> guard{"DedupToolNode<br/>allowed to run?"}
+    guard -- "exact repeat" --> cached["Return the cached result"]
+    guard -- "single-shot tool already ran" --> blocked["Tell the model to answer<br/>from what it already has"]
+    guard -- "web query copies private text" --> egress["Block the web search"]
+    guard -- "yes" --> tools["Run the tool"]
+    tools & cached & blocked & egress --> agent
 ```
 
-**Per-user RAG path:**
-`question + user_id (from contextvar) -> BGE-M3 embed -> Weaviate hybrid search in user tenant -> format with sources -> LLM -> answer + citations`
+Tokens and tool steps reach the browser as server-sent events (`token`, `tool_start`, `tool_end`, `done`) while the loop runs.
 
-**Shared knowledge base path:**
-`question -> BGE-M3 embed -> Weaviate hybrid (BM25 + vector) on GlobalKnowledgeBase collection -> chunks tagged with origin="knowledge_base" -> formatted into agent context with admin-curated metadata (book_title, author, page)`
+### Document retrieval
 
-**Merged retrieval (chat RAG mode):**
-`question -> retrieve_merged() -> half of top-k from personal corpus + half from KB -> tagged with origin -> LLM answers with citations; UI badges personal vs KB sources distinctly`
+Uploads go to the user's private tenant; admin uploads go to the shared knowledge base. The agent gets two separate tools, one per corpus, while RAG-only mode searches both.
 
-**Agent path (multi-turn, streaming):**
-`message + session history + user_id -> LangGraph 'agent' node -> LLM with bound tools -> if tool calls, route to 'tools' node (with dedup guard) -> loop until plain answer -> persist to Postgres -> emit SSE events as it runs`
+```mermaid
+flowchart LR
+    subgraph ingest["Ingestion"]
+        direction TB
+        user_file["User upload"] --> split["Split into chunks<br/>embed with BGE-M3"]
+        admin_file["Admin upload"] --> split
+    end
 
-**Multi-LLM ensemble path:**
-`question -> asyncio.gather across N models on active provider -> judge model receives all candidates -> ranks them with JSON output -> synthesizes final verdict (in the selected response language)`
+    subgraph store["Weaviate"]
+        direction TB
+        tenant[("Private tenant<br/>one per user")]
+        kb[("GlobalKnowledgeBase<br/>shared, admin-curated")]
+    end
 
-**Vision OCR path:**
-`image/scanned PDF -> normalize to PNG -> route to active provider's vision model (active_vision_model) -> extracted text returned to the agent inline; the agent answers from that text directly rather than re-searching the corpus`
+    split -- "user file" --> tenant
+    split -- "admin file" --> kb
+
+    subgraph query["Question time"]
+        direction TB
+        doc_tool["document_search<br/>agent tool"]
+        kb_tool["knowledge_base_search<br/>agent tool"]
+        merged["retrieve_merged<br/>RAG-only mode: half from each"]
+    end
+
+    tenant --> doc_tool
+    kb --> kb_tool
+    tenant --> merged
+    kb --> merged
+
+    doc_tool & kb_tool & merged --> answer["LLM answer with cited sources<br/>file · page · score · origin badge"]
+```
+
+### Multi-LLM consensus
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant API as FastAPI
+    participant Models as Candidate models
+    participant Judge as Judge model
+
+    User->>API: POST /agent/ensemble
+    par Run in parallel
+        API->>Models: Same question to each of the 3 models
+        Models-->>API: Candidate answers
+    end
+    API->>Judge: Question + all candidates
+    alt Judge returns a valid verdict
+        Judge-->>API: Ranking, reasons, final verdict
+    else Judge times out or returns bad JSON
+        API->>API: Fall back to the longest valid answer
+    end
+    API-->>User: Candidates, ranking and verdict
+```
+
+### Attachments and vision OCR
+
+```mermaid
+flowchart TD
+    file["File attached in chat"] --> kind{"File type"}
+    kind -- "TXT, MD, CSV" --> text["Read the text"]
+    kind -- "PDF" --> pdf{"pypdf finds text?"}
+    pdf -- "yes" --> text
+    pdf -- "no, scanned" --> pages["Render up to 10 pages as PNG"]
+    kind -- "Image" --> normalize["Convert WebP and GIF to PNG"]
+    pages & normalize --> vision["Vision model of the active provider"]
+    vision --> text
+    text --> inline["Text added inline to the turn<br/>marked as untrusted data"]
+    inline --> reply["Agent answers from that text"]
+```
+
+### Force-logout and account suspension
+
+Every JWT carries an `iat` claim, and `current_active_user` compares it with `users.jwt_invalidated_at` on each request, so revocation applies to every authenticated route, not only admin ones.
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    actor User
+    participant API as FastAPI
+    participant DB as PostgreSQL
+
+    User->>API: Request with a valid JWT
+    API-->>User: 200 OK
+    Admin->>API: Force-logout or block the user
+    API->>DB: Set jwt_invalidated_at = now()
+    User->>API: Next request with the same JWT
+    API->>DB: Load the user
+    DB-->>API: jwt_invalidated_at
+    API-->>User: 401, token issued before the cutoff
+```
+
+### Data model
+
+```mermaid
+erDiagram
+    users ||--o{ oauth_account : "links"
+    users ||--o{ chat_sessions : "owns"
+    chat_sessions ||--o{ chat_messages : "contains"
+
+    users {
+        uuid id PK
+        string email
+        string role "user, corpus_admin, super_admin"
+        boolean is_active
+        timestamptz jwt_invalidated_at "force-logout cutoff"
+    }
+    oauth_account {
+        uuid id PK
+        uuid user_id FK
+        string oauth_name "google or github"
+    }
+    chat_sessions {
+        uuid id PK
+        uuid user_id FK
+        string title
+        boolean title_locked
+    }
+    chat_messages {
+        int id PK
+        uuid session_id FK
+        string role "user or assistant"
+        text content
+        jsonb meta "mode, sources, tool calls, latency"
+    }
+```
+
+Vector data lives in Weaviate rather than Postgres: one tenant per user, plus the shared `GlobalKnowledgeBase` collection.
+
+### Design notes
 
 The agent is given retrieval as **two distinct tools** (`document_search` for personal docs, `knowledge_base_search` for the shared KB), not as a prompt prefix. The LLM decides whether documents are relevant for a given turn — much better than blindly retrieving on every message — and which corpus to query.
 
 Per-user isolation is enforced through a Python `contextvar` set in the agent entry point. Every tool that touches user data (`document_search`, `document_summarizer`) reads `get_current_user()` and scopes its work accordingly. The pattern is small, auditable, and impossible to forget at the route layer. The shared knowledge base bypasses the tenant filter intentionally because it's a deliberate cross-user shared resource.
-
-**Force-logout enforcement:** Every JWT carries an `iat` (issued-at) claim. The auth dependency (`current_active_user`) runs a freshness check against `users.jwt_invalidated_at` on every request. When an admin force-logs out a user, that column is set to `now()` — every JWT issued before that moment is rejected with 401. The check applies globally, not just to admin routes.
 
 ---
 
